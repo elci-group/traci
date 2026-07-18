@@ -34,23 +34,98 @@ immediately after it), making intentional propagation visible in review.
 cargo install --path .
 traci check src
 traci check crates/service --format json --fail-on warning
+traci check crates/service --format jsonl
 traci check . --format sarif > traci.sarif
 ```
+
+Human output is the default. `json` is a compact document for API/CI consumers,
+`jsonl`/`ndjson` emits streaming records for log pipelines, and `sarif` targets
+code-scanning systems. Machine modes never add decoration or ANSI colour.
 
 Exit status is `0` when policy passes, `2` when findings meet the configured
 threshold, and `1` for invalid configuration or I/O errors.
 
-Start the native polling daemon during development:
+Estimate implementation complexity without compiling the target:
 
 ```console
-traci watch src
-traci watch . --interval 500
-traci watch src --once
+traci complexity src
+traci complexity src --format json
 ```
 
-`--once` runs the same watch entry point without blocking, which is useful for
-service health checks. Traci rescans only when a Rust file is created, removed,
-resized, or modified.
+The `0..100` approximation combines non-empty lines, functions, branches,
+error propagation points, async boundaries, concurrency primitives, maximum
+brace nesting, and project breadth. It is a routing signal, not a claim of
+cyclomatic precision. Traci reports both the aggregate and the hottest files.
+
+## Daemon and notifications
+
+Start the persistent polling daemon during development:
+
+```console
+traci daemon start src
+traci daemon status
+traci daemon stop
+traci daemon run src --format jsonl
+traci daemon run src --once --format jsonl
+```
+
+The detached process stores its PID, atomic `status.json`, and append-only logs
+under `.traci/`. It rescans only when a Rust file is created, removed, resized,
+or modified. `traci watch` remains a foreground-compatible alias.
+
+When the finding count changes, notifications can fan out to:
+
+- a concise human console event;
+- a trusted local command, with notification JSON on stdin and `TRACI_EVENT`,
+  `TRACI_SEVERITY`, `TRACI_TITLE`, and `TRACI_BODY` environment variables;
+- an HTTP JSON webhook through `curl`.
+
+Severity thresholds and cooldowns suppress noisy, repeated delivery. Failed
+channels are recorded but never stop enforcement.
+
+## Guarded LLM improvement with `traci trace`
+
+Planning is safe and non-mutating:
+
+```console
+traci trace src --goal "reduce branching in the scanner"
+traci trace src --goal "simplify the scanner" --format json
+```
+
+Traci computes complexity first, selects the configured low, medium, or high
+model, and prints the provider/model/branch decision. It does not contact the
+provider or touch Git unless `--apply` is explicit:
+
+```console
+traci trace src --goal "reduce branching in the scanner" --apply
+```
+
+The applying pipeline is deliberately transactional:
+
+```text
+score → select model → baseline benchmark → isolated Git worktree
+      → LLM unified diff → path-scope check → candidate analysis
+      → repeated benchmark → regression gates → candidate commit
+      → fast-forward merge only on success
+```
+
+The monitored checkout remains untouched while the LLM works. Generated diffs
+are size-limited and may only change the requested paths. Traci rejects
+increased observability findings, excessive complexity, failed tests, and
+benchmark regressions beyond policy. A benchmarked but rejected candidate is
+committed on its branch for inspection; it is never merged. Provider or scope
+failures are discarded before evaluation.
+
+Providers are local adapters:
+
+- `provider = "command"` runs a trusted configured command, sends the prompt on
+  stdin, and exports `TRACI_MODEL`, `TRACI_GOAL`, and
+  `TRACI_COMPLEXITY_SCORE`.
+- `provider = "ollama"` runs `ollama run <selected-model>`.
+
+The provider must return a unified diff beginning with `diff --git`. The generic
+command adapter can front any hosted LLM CLI without putting credentials in
+Traci configuration.
 
 Inspect or explain the policy surface:
 
@@ -71,11 +146,40 @@ fail_on = "error"
 trace_window = 6
 require_correlation_id = true
 correlation_fields = ["correlation_id", "request_id", "trace_id"]
-ignore = ["target", ".git", ".kaptaind", "tests/fixtures"]
+ignore = ["target", ".git", ".kaptaind", ".traci", "tests/fixtures"]
 enabled_rules = ["TRC001", "TRC002", "TRC003", "TRC004", "TRC005", "TRC006", "TRC007", "TRC008"]
 
 [watch]
 interval_ms = 750
+
+[daemon]
+state_dir = ".traci"
+
+[notifications]
+enabled = true
+console = true
+min_severity = "error"
+command = ""
+webhook_url = ""
+cooldown_seconds = 30
+
+[trace]
+provider = "command"
+provider_command = "codex exec --model \"$TRACI_MODEL\" -"
+low_model = "fast"
+medium_model = "balanced"
+high_model = "deep"
+medium_threshold = 35
+high_threshold = 70
+branch_prefix = "traci/trace"
+benchmark_command = "cargo test --all-targets"
+benchmark_runs = 3
+max_regression_percent = 10
+max_complexity_increase = 0
+max_diagnostic_increase = 0
+max_context_bytes = 120000
+max_patch_bytes = 250000
+require_clean = true
 ```
 
 For a reviewed exception, place `// traci: allow` on the line. Prefer policy
@@ -128,6 +232,8 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
 cargo run -- check src
+cargo run -- complexity src --format json
+cargo run -- trace src --goal "reduce complexity" --format json
 deliver --spec deliver.toml --strict
 ```
 
