@@ -71,6 +71,7 @@ impl Notifier {
             }
         }
         if let Some(url) = &self.config.webhook_url {
+            // traci: allow - delivery errors are returned to the daemon for structured logging.
             if let Err(error) = send_webhook(url, notification) {
                 errors.push(error);
             }

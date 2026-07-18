@@ -29,6 +29,7 @@ pub fn run(paths: &[PathBuf], config: &Config, format: Format, once: bool) -> Re
             } else {
                 "violations"
             };
+            // traci: allow - the handler emits a structured daemon status error below.
             if let Err(error) = write_status(
                 &config.daemon.state_dir,
                 status,
@@ -128,7 +129,7 @@ pub fn stop(state_dir: &Path) -> Result<u32, String> {
 pub fn status(state_dir: &Path, format: Format) -> String {
     let pid = read_pid(state_dir);
     let active = pid.is_some_and(process_active);
-    let stored = fs::read_to_string(state_dir.join("status.json")).ok();
+    let stored = fs::read_to_string(state_dir.join("status.json")).unwrap_or_default();
     match format {
         Format::Text => format!(
             "Traci daemon: {}{}\nstate: {}\n",
@@ -136,14 +137,18 @@ pub fn status(state_dir: &Path, format: Format) -> String {
             pid.map_or_else(String::new, |value| format!(" (PID {value})")),
             state_dir.display()
         ),
-        Format::Json | Format::Jsonl | Format::Sarif => stored.unwrap_or_else(|| {
-            format!(
-                "{{\"status\":\"{}\",\"pid\":{},\"active\":{},\"diagnostics\":0,\"severity\":\"info\",\"last_scan_epoch\":0,\"last_error\":null}}",
-                if active { "running" } else { "stopped" },
-                pid.map_or_else(|| "null".into(), |value| value.to_string()),
-                active
-            )
-        }),
+        Format::Json | Format::Jsonl | Format::Sarif => {
+            if stored.is_empty() {
+                format!(
+                    "{{\"status\":\"{}\",\"pid\":{},\"active\":{},\"diagnostics\":0,\"severity\":\"info\",\"last_scan_epoch\":0,\"last_error\":null}}",
+                    if active { "running" } else { "stopped" },
+                    pid.map_or_else(|| "null".into(), |value| value.to_string()),
+                    active
+                )
+            } else {
+                stored
+            }
+        }
     }
 }
 
@@ -213,11 +218,14 @@ fn write_pid(state_dir: &Path, pid: u32) -> Result<(), String> {
 }
 
 fn read_pid(state_dir: &Path) -> Option<u32> {
-    fs::read_to_string(state_dir.join("daemon.pid"))
-        .ok()?
-        .trim()
-        .parse()
-        .ok()
+    let source = match fs::read_to_string(state_dir.join("daemon.pid")) {
+        Ok(source) => source,
+        Err(_error) => return None,
+    };
+    match source.trim().parse() {
+        Ok(pid) => Some(pid),
+        Err(_error) => None,
+    }
 }
 
 fn process_active(pid: u32) -> bool {

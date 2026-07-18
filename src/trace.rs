@@ -133,6 +133,7 @@ pub fn execute(plan: TracePlan, config: &Config) -> Result<TraceOutcome, String>
     let prompt = build_prompt(&plan, &baseline_complexity, &context);
     let patch = match run_provider(&worktree, &plan, config, &prompt) {
         Ok(patch) => patch,
+        // traci: allow - the provider failure is returned with operation context.
         Err(error) => {
             remove_worktree(&repo, &worktree, false)?;
             // traci: allow - the provider failure is returned with operation context.
@@ -197,6 +198,7 @@ pub fn execute(plan: TracePlan, config: &Config) -> Result<TraceOutcome, String>
             git_status(&repo, &["merge", "--ff-only", &plan.branch])?;
             (true, reason)
         }
+        // traci: allow - rejected candidate evidence is returned to the CLI.
         Err(reason) => (false, reason),
     };
     debug_assert_eq!(
@@ -233,9 +235,12 @@ fn relative_targets(repo: &Path, paths: &[PathBuf]) -> Result<Vec<Target>, Strin
             let absolute = fs::canonicalize(path).map_err(|error| {
                 format!("cannot resolve trace path {}: {error}", path.display())
             })?;
-            let relative = absolute
-                .strip_prefix(&canonical_repo)
-                .map_err(|_| format!("trace path {} is outside the repository", path.display()))?;
+            let relative = absolute.strip_prefix(&canonical_repo).map_err(|error| {
+                format!(
+                    "trace path {} is outside the repository: {error}",
+                    path.display()
+                )
+            })?;
             Ok(Target {
                 path: relative.to_path_buf(),
                 directory: absolute.is_dir(),
