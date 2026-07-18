@@ -1,0 +1,47 @@
+repo_path = "."
+
+[watch]
+path = "."
+recursive = true
+ignore_file = ".kaptainignore"
+
+[cluster]
+window = 5
+adaptive = true
+min_window_secs = 2
+max_window_secs = 30
+burst_threshold = 12
+max_paths = 20
+flush_after = 10
+
+[weights]
+s = 0.30
+a = 0.35
+d = 0.20
+r = 0.15
+
+[version_thresholds]
+patch = 0.0
+minor = 0.6
+
+[test]
+command = "cargo test --all-targets"
+required = true
+
+[staging]
+mode = "cluster"
+exclude = ["target/**", ".kaptaind/**", "*.log", ".env*"]
+
+[push]
+enabled = false
+branch = "main"
+
+[capabilities]
+network_push = false
+
+[daemon]
+startup_guard = true
+
+[notify]
+nautical_theme = true
+rate_limit_seconds = 10

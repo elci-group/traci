@@ -1,0 +1,6 @@
+target/**
+.git/**
+.kaptaind/**
+*.log
+*.tmp
+memory/**

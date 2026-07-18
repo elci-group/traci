@@ -1,0 +1,60 @@
+[[file]]
+path = "Cargo.toml"
+required = true
+forbid_regex = ["TODO", "FIXME"]
+
+[[file]]
+path = "src/lib.rs"
+required = true
+min_size_bytes = 400
+forbid_regex = ["TODO", "FIXME", "unimplemented!", "todo!"]
+
+[[file]]
+path = "src/main.rs"
+required = true
+min_size_bytes = 500
+forbid_regex = ["TODO", "FIXME", "unimplemented!", "todo!"]
+
+[[file]]
+path = "README.md"
+required = true
+require_regex = ["traci check", "traci watch", "Kaptaind"]
+
+[[file]]
+path = "kaptaind.toml"
+required = true
+require_regex = ["cargo test", "enabled = false"]
+
+[[file]]
+path = "VERSION"
+required = true
+require_regex = ["^[0-9]+\\.[0-9]+\\.[0-9]+"]
+
+[[command]]
+name = "format"
+cmd = ["cargo", "fmt", "--check"]
+expect_exit = 0
+timeout_secs = 60
+
+[[command]]
+name = "lint"
+cmd = ["cargo", "clippy", "--all-targets", "--", "-D", "warnings"]
+expect_exit = 0
+timeout_secs = 180
+
+[[command]]
+name = "tests"
+cmd = ["cargo", "test", "--all-targets"]
+expect_exit = 0
+timeout_secs = 180
+stdout_contains = ["test result: ok"]
+
+[[command]]
+name = "self-check"
+cmd = ["cargo", "run", "--quiet", "--", "check", "src", "--format", "text"]
+expect_exit = 0
+timeout_secs = 180
+
+[git]
+no_uncommitted_changes = false
+no_untracked_files = false
