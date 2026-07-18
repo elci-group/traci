@@ -1,6 +1,7 @@
 target/**
 .git/**
 .kaptaind/**
+.traci/**
 *.log
 *.tmp
 memory/**

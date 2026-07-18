@@ -4,17 +4,28 @@ use crate::types::Diagnostic;
 pub enum Format {
     Text,
     Json,
+    Jsonl,
     Sarif,
 }
 
 impl Format {
     pub fn parse(value: &str) -> Result<Self, String> {
         match value {
-            "text" => Ok(Self::Text),
+            "text" | "human" => Ok(Self::Text),
             "json" => Ok(Self::Json),
+            "jsonl" | "ndjson" => Ok(Self::Jsonl),
             "sarif" => Ok(Self::Sarif),
             // traci: allow - main records this option error with structured context.
             other => Err(format!("unknown output format '{other}'")),
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "human",
+            Self::Json => "json",
+            Self::Jsonl => "jsonl",
+            Self::Sarif => "sarif",
         }
     }
 }
@@ -23,8 +34,33 @@ pub fn render(analysis: &Analysis, format: Format) -> String {
     match format {
         Format::Text => render_text(analysis),
         Format::Json => render_json(analysis),
+        Format::Jsonl => render_jsonl(analysis),
         Format::Sarif => render_sarif(analysis),
     }
+}
+
+fn render_jsonl(analysis: &Analysis) -> String {
+    let mut lines = analysis
+        .diagnostics
+        .iter()
+        .map(|diagnostic| {
+            format!(
+                "{{\"type\":\"diagnostic\",\"data\":{}}}",
+                diagnostic_json(diagnostic)
+            )
+        })
+        .collect::<Vec<_>>();
+    let summary = analysis.summary;
+    lines.push(format!(
+        "{{\"type\":\"summary\",\"files\":{},\"diagnostics\":{},\"info\":{},\"warnings\":{},\"errors\":{},\"critical\":{}}}",
+        summary.files,
+        summary.diagnostics,
+        summary.info,
+        summary.warnings,
+        summary.errors,
+        summary.critical
+    ));
+    format!("{}\n", lines.join("\n"))
 }
 
 fn render_text(analysis: &Analysis) -> String {
@@ -123,7 +159,7 @@ fn sarif_level(diagnostic: &Diagnostic) -> &'static str {
     }
 }
 
-fn escape_json(value: &str) -> String {
+pub(crate) fn escape_json(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for character in value.chars() {
         match character {
