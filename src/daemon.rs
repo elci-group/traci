@@ -218,14 +218,8 @@ fn write_pid(state_dir: &Path, pid: u32) -> Result<(), String> {
 }
 
 fn read_pid(state_dir: &Path) -> Option<u32> {
-    let source = match fs::read_to_string(state_dir.join("daemon.pid")) {
-        Ok(source) => source,
-        Err(_error) => return None,
-    };
-    match source.trim().parse() {
-        Ok(pid) => Some(pid),
-        Err(_error) => None,
-    }
+    let source = fs::read_to_string(state_dir.join("daemon.pid")).ok()?; // traci: allow - missing state means stopped.
+    source.trim().parse().ok() // traci: allow - malformed state means stopped.
 }
 
 fn process_active(pid: u32) -> bool {

@@ -155,9 +155,9 @@ pub fn execute(plan: TracePlan, config: &Config) -> Result<TraceOutcome, String>
             config.trace.max_patch_bytes
         ));
     }
+    // traci: allow - rejected generated patches are discarded before evaluation.
     if let Err(error) = apply_patch(&worktree, &patch) {
         remove_worktree(&repo, &worktree, true)?;
-        // traci: allow - rejected generated patches are discarded before evaluation.
         return Err(error);
     }
 
