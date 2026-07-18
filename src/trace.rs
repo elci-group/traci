@@ -647,6 +647,7 @@ fn epoch_seconds() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::Summary;
 
     #[test]
     fn model_routing_happens_in_plan_before_apply() {
@@ -681,5 +682,47 @@ mod tests {
         let output = render_plan(&plan, Format::Json);
         assert!(output.contains("\"complexity_score\":42"));
         assert!(output.contains("\"apply\":false"));
+    }
+
+    #[test]
+    fn evaluation_rejects_complexity_regression() {
+        let analysis = crate::Analysis {
+            diagnostics: Vec::new(),
+            summary: Summary::default(),
+        };
+        let baseline = complexity_report(20);
+        let candidate = complexity_report(21);
+        let benchmark = Benchmark {
+            command: "true".into(),
+            runs_ms: vec![10],
+            median_ms: 10,
+            success: true,
+            failure: None,
+        };
+        let error = evaluate(
+            &analysis,
+            &analysis,
+            &baseline,
+            &candidate,
+            &benchmark,
+            &benchmark,
+            &Config::default(),
+        )
+        .expect_err("complexity increase must reject candidate");
+        assert!(error.contains("complexity increased"));
+    }
+
+    fn complexity_report(score: u8) -> ComplexityReport {
+        ComplexityReport {
+            files: Vec::new(),
+            lines: 0,
+            functions: 0,
+            branches: 0,
+            error_paths: 0,
+            async_points: 0,
+            concurrency_points: 0,
+            max_nesting: 0,
+            score,
+        }
     }
 }

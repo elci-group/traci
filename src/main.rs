@@ -348,13 +348,70 @@ fn run_trace(args: &[String]) -> Result<ExitCode, String> {
     if !apply {
         return Ok(ExitCode::SUCCESS);
     }
-    let outcome = trace::execute(plan, &config)?;
+    let trace_plan = plan.clone();
+    let outcome = match trace::execute(plan, &config) {
+        Ok(outcome) => outcome,
+        // traci: allow - the failure is emitted through the configured notifier below.
+        Err(error) => {
+            notify_trace(
+                &config,
+                "trace_error",
+                Severity::Error,
+                "Traci trace failed",
+                &error,
+                &trace_plan.branch,
+            );
+            // traci: allow - the notification above records the failed trace operation.
+            return Err(error);
+        }
+    };
     print!("{}", trace::render_outcome(&outcome, format));
+    notify_trace(
+        &config,
+        if outcome.merged {
+            "trace_merged"
+        } else {
+            "trace_rejected"
+        },
+        if outcome.merged {
+            Severity::Info
+        } else {
+            Severity::Error
+        },
+        if outcome.merged {
+            "Traci trace merged"
+        } else {
+            "Traci trace rejected"
+        },
+        &outcome.reason,
+        &outcome.plan.branch,
+    );
     Ok(if outcome.merged {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(2)
     })
+}
+
+fn notify_trace(
+    config: &Config,
+    event: &str,
+    severity: Severity,
+    title: &str,
+    body: &str,
+    branch: &str,
+) {
+    let mut notifier = traci::notify::Notifier::new(config.notifications.clone());
+    let notification = traci::notify::Notification {
+        event: event.into(),
+        severity,
+        title: title.into(),
+        body: body.into(),
+        fields: vec![("branch".into(), branch.into())],
+    };
+    for error in notifier.emit(&notification) {
+        eprintln!("level=error operation=deliver_trace_notification error={error}");
+    }
 }
 
 fn run_explain(args: &[String]) -> Result<ExitCode, String> {

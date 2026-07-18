@@ -165,7 +165,7 @@ cooldown_seconds = 30
 
 [trace]
 provider = "command"
-provider_command = "codex exec --model \"$TRACI_MODEL\" -"
+provider_command = "codex exec --model $TRACI_MODEL -"
 low_model = "fast"
 medium_model = "balanced"
 high_model = "deep"
