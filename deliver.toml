@@ -16,9 +16,33 @@ min_size_bytes = 500
 forbid_regex = ["TODO", "FIXME", "unimplemented!", "todo!"]
 
 [[file]]
+path = "src/complexity.rs"
+required = true
+min_size_bytes = 1000
+forbid_regex = ["TODO", "FIXME", "unimplemented!", "todo!"]
+
+[[file]]
+path = "src/daemon.rs"
+required = true
+min_size_bytes = 1000
+forbid_regex = ["TODO", "FIXME", "unimplemented!", "todo!"]
+
+[[file]]
+path = "src/notify.rs"
+required = true
+min_size_bytes = 700
+forbid_regex = ["TODO", "FIXME", "unimplemented!", "todo!"]
+
+[[file]]
+path = "src/trace.rs"
+required = true
+min_size_bytes = 1800
+forbid_regex = ["TODO", "FIXME", "unimplemented!", "todo!"]
+
+[[file]]
 path = "README.md"
 required = true
-require_regex = ["traci check", "traci watch", "Kaptaind"]
+require_regex = ["traci check", "traci daemon", "traci complexity", "traci trace", "Kaptaind", "--apply"]
 
 [[file]]
 path = "kaptaind.toml"
@@ -54,6 +78,27 @@ name = "self-check"
 cmd = ["cargo", "run", "--quiet", "--", "check", "src", "--format", "text"]
 expect_exit = 0
 timeout_secs = 180
+
+[[command]]
+name = "complexity-json"
+cmd = ["cargo", "run", "--quiet", "--", "complexity", "src", "--format", "json"]
+expect_exit = 0
+timeout_secs = 180
+stdout_contains = ["\"score\""]
+
+[[command]]
+name = "daemon-once"
+cmd = ["cargo", "run", "--quiet", "--", "daemon", "run", "src", "--once", "--format", "jsonl"]
+expect_exit = 0
+timeout_secs = 180
+stdout_contains = ["\"event\":\"scan\""]
+
+[[command]]
+name = "trace-plan"
+cmd = ["cargo", "run", "--quiet", "--", "trace", "src", "--goal", "reduce complexity", "--format", "json"]
+expect_exit = 0
+timeout_secs = 180
+stdout_contains = ["\"apply\":false", "\"model\""]
 
 [git]
 no_uncommitted_changes = false
