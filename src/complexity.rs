@@ -88,7 +88,7 @@ pub fn estimate_source(path: &Path, source: &str) -> FileComplexity {
         .lines()
         .filter(|line| !line.trim().is_empty())
         .count();
-    let score = score_metrics(
+    let score = score_metrics(&Metrics {
         lines,
         functions,
         branches,
@@ -96,8 +96,8 @@ pub fn estimate_source(path: &Path, source: &str) -> FileComplexity {
         async_points,
         concurrency_points,
         max_nesting,
-        1,
-    );
+        files: 1,
+    });
     FileComplexity {
         path: path.to_path_buf(),
         lines,
@@ -125,7 +125,7 @@ fn summarize(mut files: Vec<FileComplexity>) -> ComplexityReport {
     let async_points = files.iter().map(|file| file.async_points).sum();
     let concurrency_points = files.iter().map(|file| file.concurrency_points).sum();
     let max_nesting = files.iter().map(|file| file.max_nesting).max().unwrap_or(0);
-    let score = score_metrics(
+    let score = score_metrics(&Metrics {
         lines,
         functions,
         branches,
@@ -133,8 +133,8 @@ fn summarize(mut files: Vec<FileComplexity>) -> ComplexityReport {
         async_points,
         concurrency_points,
         max_nesting,
-        files.len(),
-    );
+        files: files.len(),
+    });
     ComplexityReport {
         files,
         lines,
@@ -148,7 +148,7 @@ fn summarize(mut files: Vec<FileComplexity>) -> ComplexityReport {
     }
 }
 
-fn score_metrics(
+struct Metrics {
     lines: usize,
     functions: usize,
     branches: usize,
@@ -157,15 +157,17 @@ fn score_metrics(
     concurrency_points: usize,
     max_nesting: usize,
     files: usize,
-) -> u8 {
-    let points = (lines / 100).min(20)
-        + (functions / 3).min(10)
-        + (branches / 2).min(20)
-        + (error_paths * 2).min(15)
-        + (async_points * 2).min(10)
-        + (concurrency_points * 3).min(10)
-        + (max_nesting * 2).min(10)
-        + files.min(5);
+}
+
+fn score_metrics(metrics: &Metrics) -> u8 {
+    let points = (metrics.lines / 100).min(20)
+        + (metrics.functions / 3).min(10)
+        + (metrics.branches / 2).min(20)
+        + (metrics.error_paths * 2).min(15)
+        + (metrics.async_points * 2).min(10)
+        + (metrics.concurrency_points * 3).min(10)
+        + (metrics.max_nesting * 2).min(10)
+        + metrics.files.min(5);
     u8::try_from(points.min(100)).unwrap_or(100)
 }
 
