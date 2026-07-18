@@ -2,6 +2,7 @@ use crate::analyzer::{analyze_paths, collect_rust_files};
 use crate::complexity::{estimate_paths, ComplexityReport};
 use crate::config::Config;
 use crate::report::{escape_json, Format};
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -93,18 +94,6 @@ pub fn execute(plan: TracePlan, config: &Config) -> Result<TraceOutcome, String>
     let targets = relative_targets(&repo, &plan.paths)?;
     let baseline_analysis = analyze_paths(&plan.paths, config)?;
     let baseline_complexity = estimate_paths(&plan.paths, config)?;
-    let baseline_benchmark = benchmark(&repo, config)?;
-    if !baseline_benchmark.success {
-        // traci: allow - the CLI records benchmark failures at its boundary.
-        return Err(format!(
-            "baseline benchmark failed: {}",
-            baseline_benchmark
-                .failure
-                .as_deref()
-                .unwrap_or("unknown failure")
-        ));
-    }
-
     let worktree = repo
         .join(&config.daemon.state_dir)
         .join("worktrees")
@@ -125,6 +114,22 @@ pub fn execute(plan: TracePlan, config: &Config) -> Result<TraceOutcome, String>
         ],
     )?;
 
+    let baseline_benchmark = benchmark(&worktree, config)?;
+    if !baseline_benchmark.success {
+        remove_worktree(&repo, &worktree, true)?;
+        // traci: allow - the CLI records benchmark failures at its boundary.
+        return Err(format!(
+            "baseline benchmark failed: {}",
+            baseline_benchmark
+                .failure
+                .as_deref()
+                .unwrap_or("unknown failure")
+        ));
+    }
+    let preexisting_changes = changed_paths(&worktree)?
+        .into_iter()
+        .collect::<HashSet<_>>();
+
     let worktree_paths = targets
         .iter()
         .map(|target| worktree.join(&target.path))
@@ -141,13 +146,13 @@ pub fn execute(plan: TracePlan, config: &Config) -> Result<TraceOutcome, String>
         Ok(patch) => patch,
         // traci: allow - the provider failure is returned with operation context.
         Err(error) => {
-            remove_worktree(&repo, &worktree, false)?;
+            remove_worktree(&repo, &worktree, true)?;
             // traci: allow - the provider failure is returned with operation context.
             return Err(error);
         }
     };
     if patch.len() > config.trace.max_patch_bytes {
-        remove_worktree(&repo, &worktree, false)?;
+        remove_worktree(&repo, &worktree, true)?;
         // traci: allow - oversized generated patches are rejected before application.
         return Err(format!(
             "provider patch is {} bytes; limit is {}",
@@ -162,9 +167,12 @@ pub fn execute(plan: TracePlan, config: &Config) -> Result<TraceOutcome, String>
         return Err(error);
     }
 
-    let changed = changed_paths(&worktree)?;
+    let changed = changed_paths(&worktree)?
+        .into_iter()
+        .filter(|path| !preexisting_changes.contains(path))
+        .collect::<Vec<_>>();
     if changed.is_empty() {
-        remove_worktree(&repo, &worktree, false)?;
+        remove_worktree(&repo, &worktree, true)?;
         // traci: allow - a provider that emits no change cannot be benchmarked.
         return Err("provider produced no repository changes".into());
     }
@@ -190,7 +198,7 @@ pub fn execute(plan: TracePlan, config: &Config) -> Result<TraceOutcome, String>
         config,
     );
 
-    git_status(&worktree, &["add", "-A"])?;
+    git_add_paths(&worktree, &changed)?;
     let message = if verdict.is_ok() {
         format!("traci: {}", plan.goal)
     } else {
@@ -202,7 +210,7 @@ pub fn execute(plan: TracePlan, config: &Config) -> Result<TraceOutcome, String>
     }
     commit_args.extend(["-m", &message]);
     git_status(&worktree, &commit_args)?;
-    remove_worktree(&repo, &worktree, false)?;
+    remove_worktree(&repo, &worktree, true)?;
 
     let (merged, reason) = match verdict {
         Ok(reason) => {
@@ -516,6 +524,19 @@ fn git_status(directory: &Path, args: &[&str]) -> Result<(), String> {
         .output()
         .map_err(|error| format!("cannot run git {}: {error}", args.join(" ")))?;
     require_success(&format!("git {}", args.join(" ")), &output)
+}
+
+fn git_add_paths(directory: &Path, paths: &[PathBuf]) -> Result<(), String> {
+    let mut command = Command::new("git");
+    command
+        .arg("add")
+        .arg("--")
+        .args(paths)
+        .current_dir(directory);
+    let output = command
+        .output()
+        .map_err(|error| format!("cannot stage trace candidate: {error}"))?;
+    require_success("git add trace candidate", &output)
 }
 
 fn require_success(operation: &str, output: &Output) -> Result<(), String> {
