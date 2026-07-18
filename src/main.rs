@@ -14,7 +14,7 @@ fail_on = "error"
 trace_window = 6
 require_correlation_id = true
 correlation_fields = ["correlation_id", "request_id", "trace_id"]
-ignore = ["target", ".git", ".kaptaind"]
+ignore = ["target", ".git", ".kaptaind", ".traci"]
 enabled_rules = ["TRC001", "TRC002", "TRC003", "TRC004", "TRC005", "TRC006", "TRC007", "TRC008"]
 
 [watch]

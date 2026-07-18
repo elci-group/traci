@@ -64,7 +64,12 @@ impl Default for Config {
                 "request_id".into(),
                 "trace_id".into(),
             ],
-            ignore: vec!["target".into(), ".git".into(), ".kaptaind".into()],
+            ignore: vec![
+                "target".into(),
+                ".git".into(),
+                ".kaptaind".into(),
+                ".traci".into(),
+            ],
             enabled_rules: Rule::ALL.into_iter().collect(),
             watch_interval_ms: 750,
             daemon: DaemonConfig {

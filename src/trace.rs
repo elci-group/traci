@@ -129,7 +129,13 @@ pub fn execute(plan: TracePlan, config: &Config) -> Result<TraceOutcome, String>
         .iter()
         .map(|target| worktree.join(&target.path))
         .collect::<Vec<_>>();
-    let context = build_context(&worktree_paths, config)?;
+    let mut candidate_config = config.clone();
+    if let Some(state_name) = config.daemon.state_dir.file_name() {
+        candidate_config
+            .ignore
+            .retain(|pattern| Path::new(pattern).file_name() != Some(state_name));
+    }
+    let context = build_context(&worktree, &worktree_paths, &candidate_config)?;
     let prompt = build_prompt(&plan, &baseline_complexity, &context);
     let patch = match run_provider(&worktree, &plan, config, &prompt) {
         Ok(patch) => patch,
@@ -149,7 +155,11 @@ pub fn execute(plan: TracePlan, config: &Config) -> Result<TraceOutcome, String>
             config.trace.max_patch_bytes
         ));
     }
-    apply_patch(&worktree, &patch)?;
+    if let Err(error) = apply_patch(&worktree, &patch) {
+        remove_worktree(&repo, &worktree, true)?;
+        // traci: allow - rejected generated patches are discarded before evaluation.
+        return Err(error);
+    }
 
     let changed = changed_paths(&worktree)?;
     if changed.is_empty() {
@@ -166,8 +176,8 @@ pub fn execute(plan: TracePlan, config: &Config) -> Result<TraceOutcome, String>
         ));
     }
 
-    let candidate_analysis = analyze_paths(&worktree_paths, config)?;
-    let candidate_complexity = estimate_paths(&worktree_paths, config)?;
+    let candidate_analysis = analyze_paths(&worktree_paths, &candidate_config)?;
+    let candidate_complexity = estimate_paths(&worktree_paths, &candidate_config)?;
     let candidate_benchmark = benchmark(&worktree, config)?;
     let verdict = evaluate(
         &baseline_analysis,
@@ -261,13 +271,14 @@ fn target_allows(changed: &Path, targets: &[Target]) -> bool {
     })
 }
 
-fn build_context(paths: &[PathBuf], config: &Config) -> Result<String, String> {
+fn build_context(root: &Path, paths: &[PathBuf], config: &Config) -> Result<String, String> {
     let files = collect_rust_files(paths, config)?;
     let mut context = String::new();
     for path in files {
         let source = fs::read_to_string(&path)
             .map_err(|error| format!("cannot read provider context {}: {error}", path.display()))?;
-        let header = format!("\n--- {} ---\n", path.display());
+        let display_path = path.strip_prefix(root).unwrap_or(&path);
+        let header = format!("\n--- {} ---\n", display_path.display());
         if context.len() + header.len() + source.len() > config.trace.max_context_bytes {
             break;
         }
@@ -468,9 +479,10 @@ fn evaluate(
 }
 
 fn changed_paths(worktree: &Path) -> Result<Vec<PathBuf>, String> {
-    Ok(git_output(worktree, &["diff", "--name-only"])?
+    Ok(git_output(worktree, &["status", "--porcelain"])?
         .lines()
-        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| line.get(3..))
+        .map(|path| path.rsplit_once(" -> ").map_or(path, |(_, target)| target))
         .map(PathBuf::from)
         .collect())
 }
