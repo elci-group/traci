@@ -1,4 +1,5 @@
 /target/
 /.kaptaind/
+/.traci/
 *.log
 *.tmp

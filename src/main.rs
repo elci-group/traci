@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::str::FromStr;
 use std::time::Duration;
-use traci::{analyze_paths, fails_policy, render, Config, Format, Rule, Severity};
+use traci::{
+    analyze_paths, complexity, fails_policy, render, trace, Config, Format, Rule, Severity,
+};
 
 const DEFAULT_POLICY: &str = r#"[analysis]
 fail_on = "error"
@@ -17,6 +19,35 @@ enabled_rules = ["TRC001", "TRC002", "TRC003", "TRC004", "TRC005", "TRC006", "TR
 
 [watch]
 interval_ms = 750
+
+[daemon]
+state_dir = ".traci"
+
+[notifications]
+enabled = true
+console = true
+min_severity = "error"
+command = ""
+webhook_url = ""
+cooldown_seconds = 30
+
+[trace]
+provider = "command"
+provider_command = ""
+low_model = "fast"
+medium_model = "balanced"
+high_model = "deep"
+medium_threshold = 35
+high_threshold = 70
+branch_prefix = "traci/trace"
+benchmark_command = "cargo test --all-targets"
+benchmark_runs = 3
+max_regression_percent = 10
+max_complexity_increase = 0
+max_diagnostic_increase = 0
+max_context_bytes = 120000
+max_patch_bytes = 250000
+require_clean = true
 "#;
 
 fn main() -> ExitCode {
@@ -37,6 +68,9 @@ fn run(args: Vec<String>) -> Result<ExitCode, String> {
     match command {
         "check" => run_check(&args[1..]),
         "watch" => run_watch(&args[1..]),
+        "complexity" => run_complexity(&args[1..]),
+        "daemon" => run_daemon(&args[1..]),
+        "trace" => run_trace(&args[1..]),
         "rules" => {
             print_rules();
             Ok(ExitCode::SUCCESS)
@@ -195,6 +229,119 @@ fn run_watch(args: &[String]) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+fn run_complexity(args: &[String]) -> Result<ExitCode, String> {
+    let options = parse_options(args, false)?;
+    let config = load_config(&options)?;
+    let report = complexity::estimate_paths(&options.paths, &config)?;
+    println!("{}", complexity::render_complexity(&report, options.format));
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_daemon(args: &[String]) -> Result<ExitCode, String> {
+    let action = args
+        .first()
+        .ok_or_else(|| "usage: traci daemon start|run|stop|status [OPTIONS]".to_string())?;
+    let options = parse_options(&args[1..], matches!(action.as_str(), "start" | "run"))?;
+    let config = load_config(&options)?;
+    match action.as_str() {
+        "run" => {
+            traci::daemon::run(&options.paths, &config, options.format, options.once)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        "start" => {
+            let pid = traci::daemon::start(
+                &options.paths,
+                &config,
+                options.config_path.as_deref(),
+                options.format,
+            )?;
+            if options.format == Format::Text {
+                println!("Traci daemon started as PID {pid}");
+            } else {
+                println!("{{\"event\":\"daemon_started\",\"pid\":{pid}}}");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        "stop" => {
+            let pid = traci::daemon::stop(&config.daemon.state_dir)?;
+            if options.format == Format::Text {
+                println!("Traci daemon PID {pid} stopped");
+            } else {
+                println!("{{\"event\":\"daemon_stopped\",\"pid\":{pid}}}");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        "status" => {
+            println!(
+                "{}",
+                traci::daemon::status(&config.daemon.state_dir, options.format)
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        _ => {
+            // traci: allow - main records command validation failures.
+            Err(format!("unknown daemon action '{action}'"))
+        }
+    }
+}
+
+fn run_trace(args: &[String]) -> Result<ExitCode, String> {
+    let mut paths = Vec::new();
+    let mut config_path = None;
+    let mut format = Format::Text;
+    let mut goal = None;
+    let mut apply = false;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--config" => {
+                index += 1;
+                config_path = Some(PathBuf::from(required_value(args, index, "--config")?));
+            }
+            "--format" => {
+                index += 1;
+                format = Format::parse(required_value(args, index, "--format")?)?;
+            }
+            "--goal" => {
+                index += 1;
+                goal = Some(required_value(args, index, "--goal")?.to_string());
+            }
+            "--apply" => apply = true,
+            option if option.starts_with('-') => {
+                // traci: allow - main records command validation failures.
+                return Err(format!("unknown trace option '{option}'"));
+            }
+            path => paths.push(PathBuf::from(path)),
+        }
+        index += 1;
+    }
+    if paths.is_empty() {
+        paths.push(PathBuf::from("."));
+    }
+    let goal = goal.ok_or_else(|| "traci trace requires --goal TEXT".to_string())?;
+    let options = Options {
+        paths: paths.clone(),
+        config_path,
+        format,
+        fail_on: None,
+        interval_ms: None,
+        once: false,
+    };
+    let config = load_config(&options)?;
+    let plan = trace::plan(&paths, &goal, &config, apply)?;
+    print!("{}", trace::render_plan(&plan, format));
+    if !apply {
+        return Ok(ExitCode::SUCCESS);
+    }
+    let outcome = trace::execute(plan, &config)?;
+    print!("{}", trace::render_outcome(&outcome, format));
+    Ok(if outcome.merged {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(2)
+    })
+}
+
 fn run_explain(args: &[String]) -> Result<ExitCode, String> {
     let code = args
         .first()
@@ -254,23 +401,26 @@ fn print_rules() {
 fn print_help() {
     println!(
         "Traci {} — observability enforcement for Rust\n\n\
-         Usage:\n  traci check [PATH...] [OPTIONS]\n  traci watch [PATH...] [OPTIONS]\n  \
-         traci rules\n  traci explain RULE\n  traci init [--force]\n\n\
-         Run 'traci check --help' or 'traci watch --help' for command options.",
+         Usage:\n  traci check [PATH...] [OPTIONS]\n  traci complexity [PATH...] [OPTIONS]\n  \
+         traci daemon start|run|stop|status [PATH...] [OPTIONS]\n  \
+         traci trace [PATH...] --goal TEXT [--apply] [OPTIONS]\n  \
+         traci watch [PATH...] [OPTIONS]\n  traci rules\n  traci explain RULE\n  \
+         traci init [--force]\n\n\
+         Human output is the default; use --format json, jsonl, or sarif for machines.",
         env!("CARGO_PKG_VERSION")
     );
 }
 
 fn print_check_help() {
     println!(
-        "Usage: traci check [PATH...] [--config FILE] [--format text|json|sarif] \
+        "Usage: traci check [PATH...] [--config FILE] [--format human|json|jsonl|sarif] \
          [--fail-on info|warning|error|critical]"
     );
 }
 
 fn print_watch_help() {
     println!(
-        "Usage: traci watch [PATH...] [--config FILE] [--format text|json|sarif] \
+        "Usage: traci watch [PATH...] [--config FILE] [--format human|json|jsonl|sarif] \
          [--fail-on LEVEL] [--interval MS] [--once]"
     );
 }
