@@ -13,6 +13,44 @@ pub struct Config {
     pub ignore: Vec<String>,
     pub enabled_rules: HashSet<Rule>,
     pub watch_interval_ms: u64,
+    pub daemon: DaemonConfig,
+    pub notifications: NotificationConfig,
+    pub trace: TraceConfig,
+}
+
+#[derive(Clone, Debug)]
+pub struct DaemonConfig {
+    pub state_dir: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+pub struct NotificationConfig {
+    pub enabled: bool,
+    pub console: bool,
+    pub min_severity: Severity,
+    pub command: Option<String>,
+    pub webhook_url: Option<String>,
+    pub cooldown_seconds: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct TraceConfig {
+    pub provider: String,
+    pub provider_command: Option<String>,
+    pub low_model: String,
+    pub medium_model: String,
+    pub high_model: String,
+    pub medium_threshold: u8,
+    pub high_threshold: u8,
+    pub branch_prefix: String,
+    pub benchmark_command: String,
+    pub benchmark_runs: usize,
+    pub max_regression_percent: u64,
+    pub max_complexity_increase: u8,
+    pub max_diagnostic_increase: usize,
+    pub max_context_bytes: usize,
+    pub max_patch_bytes: usize,
+    pub require_clean: bool,
 }
 
 impl Default for Config {
@@ -29,6 +67,35 @@ impl Default for Config {
             ignore: vec!["target".into(), ".git".into(), ".kaptaind".into()],
             enabled_rules: Rule::ALL.into_iter().collect(),
             watch_interval_ms: 750,
+            daemon: DaemonConfig {
+                state_dir: PathBuf::from(".traci"),
+            },
+            notifications: NotificationConfig {
+                enabled: true,
+                console: true,
+                min_severity: Severity::Error,
+                command: None,
+                webhook_url: None,
+                cooldown_seconds: 30,
+            },
+            trace: TraceConfig {
+                provider: "command".into(),
+                provider_command: None,
+                low_model: "small".into(),
+                medium_model: "medium".into(),
+                high_model: "large".into(),
+                medium_threshold: 35,
+                high_threshold: 70,
+                branch_prefix: "traci/trace".into(),
+                benchmark_command: "cargo test --all-targets".into(),
+                benchmark_runs: 3,
+                max_regression_percent: 10,
+                max_complexity_increase: 0,
+                max_diagnostic_increase: 0,
+                max_context_bytes: 120_000,
+                max_patch_bytes: 250_000,
+                require_clean: true,
+            },
         }
     }
 }
@@ -102,6 +169,65 @@ impl Config {
                 ("watch", "interval_ms") => {
                     config.watch_interval_ms = parse_number(value, index + 1)?;
                 }
+                ("daemon", "state_dir") => {
+                    config.daemon.state_dir = PathBuf::from(unquote(value)?);
+                }
+                ("notifications", "enabled") => {
+                    config.notifications.enabled = parse_bool(value, index + 1)?;
+                }
+                ("notifications", "console") => {
+                    config.notifications.console = parse_bool(value, index + 1)?;
+                }
+                ("notifications", "min_severity") => {
+                    config.notifications.min_severity = Severity::from_str(&unquote(value)?)?;
+                }
+                ("notifications", "command") => {
+                    config.notifications.command = parse_optional_string(value)?;
+                }
+                ("notifications", "webhook_url") => {
+                    config.notifications.webhook_url = parse_optional_string(value)?;
+                }
+                ("notifications", "cooldown_seconds") => {
+                    config.notifications.cooldown_seconds = parse_number(value, index + 1)?;
+                }
+                ("trace", "provider") => config.trace.provider = unquote(value)?,
+                ("trace", "provider_command") => {
+                    config.trace.provider_command = parse_optional_string(value)?;
+                }
+                ("trace", "low_model") => config.trace.low_model = unquote(value)?,
+                ("trace", "medium_model") => config.trace.medium_model = unquote(value)?,
+                ("trace", "high_model") => config.trace.high_model = unquote(value)?,
+                ("trace", "medium_threshold") => {
+                    config.trace.medium_threshold = parse_number(value, index + 1)?;
+                }
+                ("trace", "high_threshold") => {
+                    config.trace.high_threshold = parse_number(value, index + 1)?;
+                }
+                ("trace", "branch_prefix") => config.trace.branch_prefix = unquote(value)?,
+                ("trace", "benchmark_command") => {
+                    config.trace.benchmark_command = unquote(value)?;
+                }
+                ("trace", "benchmark_runs") => {
+                    config.trace.benchmark_runs = parse_number(value, index + 1)?;
+                }
+                ("trace", "max_regression_percent") => {
+                    config.trace.max_regression_percent = parse_number(value, index + 1)?;
+                }
+                ("trace", "max_complexity_increase") => {
+                    config.trace.max_complexity_increase = parse_number(value, index + 1)?;
+                }
+                ("trace", "max_diagnostic_increase") => {
+                    config.trace.max_diagnostic_increase = parse_number(value, index + 1)?;
+                }
+                ("trace", "max_context_bytes") => {
+                    config.trace.max_context_bytes = parse_number(value, index + 1)?;
+                }
+                ("trace", "max_patch_bytes") => {
+                    config.trace.max_patch_bytes = parse_number(value, index + 1)?;
+                }
+                ("trace", "require_clean") => {
+                    config.trace.require_clean = parse_bool(value, index + 1)?;
+                }
                 _ => {
                     // traci: allow - the caller records policy failures at the CLI boundary.
                     return Err(format!("line {}: unknown key {section}.{key}", index + 1));
@@ -119,6 +245,26 @@ impl Config {
         if config.correlation_fields.is_empty() {
             // traci: allow - the caller records policy failures at the CLI boundary.
             return Err("analysis.correlation_fields cannot be empty".into());
+        }
+        if config.daemon.state_dir.as_os_str().is_empty() {
+            // traci: allow - the caller records policy failures at the CLI boundary.
+            return Err("daemon.state_dir cannot be empty".into());
+        }
+        if config.trace.medium_threshold >= config.trace.high_threshold
+            || config.trace.high_threshold > 100
+        {
+            // traci: allow - the caller records policy failures at the CLI boundary.
+            return Err("trace thresholds must satisfy medium < high <= 100".into());
+        }
+        if config.trace.benchmark_runs == 0 {
+            // traci: allow - the caller records policy failures at the CLI boundary.
+            return Err("trace.benchmark_runs must be greater than zero".into());
+        }
+        if config.trace.branch_prefix.trim().is_empty()
+            || config.trace.benchmark_command.trim().is_empty()
+        {
+            // traci: allow - the caller records policy failures at the CLI boundary.
+            return Err("trace branch prefix and benchmark command cannot be empty".into());
         }
         Ok(config)
     }
@@ -138,6 +284,18 @@ impl Config {
     }
 }
 
+impl TraceConfig {
+    pub fn model_for_score(&self, score: u8) -> &str {
+        if score >= self.high_threshold {
+            &self.high_model
+        } else if score >= self.medium_threshold {
+            &self.medium_model
+        } else {
+            &self.low_model
+        }
+    }
+}
+
 fn unquote(value: &str) -> Result<String, String> {
     let trimmed = value.trim();
     if trimmed.len() >= 2 && trimmed.starts_with('"') && trimmed.ends_with('"') {
@@ -146,6 +304,11 @@ fn unquote(value: &str) -> Result<String, String> {
         // traci: allow - the caller records policy failures at the CLI boundary.
         Err(format!("expected quoted string, got '{trimmed}'"))
     }
+}
+
+fn parse_optional_string(value: &str) -> Result<Option<String>, String> {
+    let parsed = unquote(value)?;
+    Ok((!parsed.is_empty()).then_some(parsed))
 }
 
 fn parse_number<T>(value: &str, line: usize) -> Result<T, String>
@@ -198,6 +361,35 @@ mod tests {
 
                 [watch]
                 interval_ms = 100
+
+                [daemon]
+                state_dir = ".traci-test"
+
+                [notifications]
+                enabled = true
+                console = false
+                min_severity = "warning"
+                command = ""
+                webhook_url = ""
+                cooldown_seconds = 5
+
+                [trace]
+                provider = "command"
+                provider_command = "fake-provider"
+                low_model = "tiny"
+                medium_model = "standard"
+                high_model = "large"
+                medium_threshold = 30
+                high_threshold = 60
+                branch_prefix = "traci/test"
+                benchmark_command = "cargo test"
+                benchmark_runs = 2
+                max_regression_percent = 5
+                max_complexity_increase = 0
+                max_diagnostic_increase = 0
+                max_context_bytes = 10000
+                max_patch_bytes = 20000
+                require_clean = true
             "#,
         )
         .expect("valid policy");
@@ -206,6 +398,9 @@ mod tests {
         assert!(config.require_correlation_id);
         assert!(config.rule_enabled(Rule::UntracedError));
         assert!(!config.rule_enabled(Rule::OpaquePanic));
+        assert_eq!(config.trace.model_for_score(29), "tiny");
+        assert_eq!(config.trace.model_for_score(30), "standard");
+        assert_eq!(config.trace.model_for_score(60), "large");
     }
 
     #[test]
