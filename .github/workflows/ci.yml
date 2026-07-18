@@ -19,3 +19,6 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --all-targets
       - run: cargo run -- check src
+      - run: cargo run -- complexity src --format json
+      - run: cargo run -- daemon run src --once --format jsonl
+      - run: cargo run -- trace src --goal "reduce complexity" --format json

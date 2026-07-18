@@ -16,6 +16,7 @@ pub fn run(paths: &[PathBuf], config: &Config, format: Format, once: bool) -> Re
     }
     let mut notifier = Notifier::new(config.notifications.clone());
     let mut previous_diagnostics = None;
+    let mut previous_severity = Severity::Info;
     crate::watch::watch(
         paths,
         config,
@@ -47,6 +48,7 @@ pub fn run(paths: &[PathBuf], config: &Config, format: Format, once: bool) -> Re
                 }
                 previous_diagnostics = Some(analysis.summary.diagnostics);
             }
+            previous_severity = severity;
         },
     )?;
     if once {
@@ -55,7 +57,7 @@ pub fn run(paths: &[PathBuf], config: &Config, format: Format, once: bool) -> Re
             "idle",
             None,
             previous_diagnostics.unwrap_or(0),
-            Severity::Info,
+            previous_severity,
             None,
         )?;
     }
@@ -67,6 +69,7 @@ pub fn start(
     config: &Config,
     config_path: Option<&Path>,
     format: Format,
+    interval_ms: Option<u64>,
 ) -> Result<u32, String> {
     ensure_state_dir(&config.daemon.state_dir)?;
     if let Some(pid) = read_pid(&config.daemon.state_dir) {
@@ -86,6 +89,9 @@ pub fn start(
         .args(["--format", format.as_str()]);
     if let Some(path) = config_path {
         command.arg("--config").arg(path);
+    }
+    if let Some(interval) = interval_ms {
+        command.arg("--interval").arg(interval.to_string());
     }
     let child = command
         .stdin(Stdio::null())

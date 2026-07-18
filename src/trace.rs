@@ -158,6 +158,7 @@ pub fn execute(plan: TracePlan, config: &Config) -> Result<TraceOutcome, String>
     // traci: allow - rejected generated patches are discarded before evaluation.
     if let Err(error) = apply_patch(&worktree, &patch) {
         remove_worktree(&repo, &worktree, true)?;
+        // traci: allow - git apply supplied detailed command context.
         return Err(error);
     }
 

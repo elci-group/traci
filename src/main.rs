@@ -204,7 +204,14 @@ fn run_watch(args: &[String]) -> Result<ExitCode, String> {
         // traci: allow - these branches propagate to the structured CLI boundary.
         Err(error) => return Err(error),
     };
-    let config = load_config(&options)?;
+    let mut config = load_config(&options)?;
+    if let Some(interval) = options.interval_ms {
+        if interval < 50 {
+            // traci: allow - main records command validation failures.
+            return Err("--interval must be at least 50 milliseconds".into());
+        }
+        config.watch_interval_ms = interval;
+    }
     let interval = options.interval_ms.unwrap_or(config.watch_interval_ms);
     if interval < 50 {
         // traci: allow - main records this option error with structured context.
@@ -242,7 +249,14 @@ fn run_daemon(args: &[String]) -> Result<ExitCode, String> {
         .first()
         .ok_or_else(|| "usage: traci daemon start|run|stop|status [OPTIONS]".to_string())?;
     let options = parse_options(&args[1..], matches!(action.as_str(), "start" | "run"))?;
-    let config = load_config(&options)?;
+    let mut config = load_config(&options)?;
+    if let Some(interval) = options.interval_ms {
+        if interval < 50 {
+            // traci: allow - main records command validation failures.
+            return Err("--interval must be at least 50 milliseconds".into());
+        }
+        config.watch_interval_ms = interval;
+    }
     match action.as_str() {
         "run" => {
             traci::daemon::run(&options.paths, &config, options.format, options.once)?;
@@ -254,6 +268,7 @@ fn run_daemon(args: &[String]) -> Result<ExitCode, String> {
                 &config,
                 options.config_path.as_deref(),
                 options.format,
+                options.interval_ms,
             )?;
             if options.format == Format::Text {
                 println!("Traci daemon started as PID {pid}");
