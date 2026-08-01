@@ -1,6 +1,7 @@
 [analysis]
 fail_on = "error"
 trace_window = 6
+production_only = false
 require_correlation_id = true
 correlation_fields = ["correlation_id", "request_id", "trace_id"]
 ignore = ["target", ".git", ".kaptaind", ".traci", "tests/fixtures"]
@@ -19,6 +20,11 @@ min_severity = "error"
 command = ""
 webhook_url = ""
 cooldown_seconds = 30
+
+[ui]
+color = "auto"
+emoji = true
+animate = true
 
 [trace]
 provider = "command"

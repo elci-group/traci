@@ -1,4 +1,4 @@
-use crate::types::{Rule, Severity};
+use crate::types::{ColorChoice, Rule, Severity};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,6 +8,7 @@ use std::str::FromStr;
 pub struct Config {
     pub fail_on: Severity,
     pub trace_window: usize,
+    pub production_only: bool,
     pub require_correlation_id: bool,
     pub correlation_fields: Vec<String>,
     pub ignore: Vec<String>,
@@ -15,6 +16,7 @@ pub struct Config {
     pub watch_interval_ms: u64,
     pub daemon: DaemonConfig,
     pub notifications: NotificationConfig,
+    pub ui: UiConfig,
     pub trace: TraceConfig,
 }
 
@@ -31,6 +33,13 @@ pub struct NotificationConfig {
     pub command: Option<String>,
     pub webhook_url: Option<String>,
     pub cooldown_seconds: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct UiConfig {
+    pub color: ColorChoice,
+    pub emoji: bool,
+    pub animate: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -58,6 +67,7 @@ impl Default for Config {
         Self {
             fail_on: Severity::Error,
             trace_window: 6,
+            production_only: false,
             require_correlation_id: false,
             correlation_fields: vec![
                 "correlation_id".into(),
@@ -82,6 +92,11 @@ impl Default for Config {
                 command: None,
                 webhook_url: None,
                 cooldown_seconds: 30,
+            },
+            ui: UiConfig {
+                color: ColorChoice::Auto,
+                emoji: true,
+                animate: true,
             },
             trace: TraceConfig {
                 provider: "command".into(),
@@ -154,6 +169,9 @@ impl Config {
                 ("analysis", "trace_window") => {
                     config.trace_window = parse_number(value, index + 1)?;
                 }
+                ("analysis", "production_only") => {
+                    config.production_only = parse_bool(value, index + 1)?;
+                }
                 ("analysis", "require_correlation_id") => {
                     config.require_correlation_id = parse_bool(value, index + 1)?;
                 }
@@ -194,6 +212,15 @@ impl Config {
                 }
                 ("notifications", "cooldown_seconds") => {
                     config.notifications.cooldown_seconds = parse_number(value, index + 1)?;
+                }
+                ("ui", "color") => {
+                    config.ui.color = ColorChoice::from_str(&unquote(value)?)?;
+                }
+                ("ui", "emoji") => {
+                    config.ui.emoji = parse_bool(value, index + 1)?;
+                }
+                ("ui", "animate") => {
+                    config.ui.animate = parse_bool(value, index + 1)?;
                 }
                 ("trace", "provider") => config.trace.provider = unquote(value)?,
                 ("trace", "provider_command") => {
@@ -359,6 +386,7 @@ mod tests {
                 [analysis]
                 fail_on = "critical"
                 trace_window = 3
+                production_only = true
                 require_correlation_id = true
                 correlation_fields = ["request_id"]
                 ignore = ["vendor"]
@@ -377,6 +405,11 @@ mod tests {
                 command = ""
                 webhook_url = ""
                 cooldown_seconds = 5
+
+                [ui]
+                color = "never"
+                emoji = false
+                animate = false
 
                 [trace]
                 provider = "command"
@@ -400,6 +433,10 @@ mod tests {
         .expect("valid policy");
         assert_eq!(config.fail_on, Severity::Critical);
         assert_eq!(config.trace_window, 3);
+        assert!(config.production_only);
+        assert_eq!(config.ui.color, ColorChoice::Never);
+        assert!(!config.ui.emoji);
+        assert!(!config.ui.animate);
         assert!(config.require_correlation_id);
         assert!(config.rule_enabled(Rule::UntracedError));
         assert!(!config.rule_enabled(Rule::OpaquePanic));

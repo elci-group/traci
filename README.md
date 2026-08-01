@@ -42,6 +42,40 @@ Human output is the default. `json` is a compact document for API/CI consumers,
 `jsonl`/`ndjson` emits streaming records for log pipelines, and `sarif` targets
 code-scanning systems. Machine modes never add decoration or ANSI colour.
 
+## Production scope and terminal UI
+
+Limit every file-based operation to deployable code with `--production-only`:
+
+```console
+traci check . --production-only
+traci complexity . --production-only
+traci daemon start . --production-only
+traci trace . --production-only --goal "instrument production error paths"
+```
+
+This scope excludes `test`/`tests`, benches, benchmarks, examples, fixtures,
+fuzz targets, snapshots, and conventional `_test.rs`, `.test.rs`, and
+`.spec.rs` files. `--all-code` explicitly overrides a policy that enables
+production scope. Configured ignore rules still apply in both modes.
+
+Human output automatically gains colour, emoji, and a short progress animation
+when attached to a compatible terminal. Redirected output stays undecorated;
+`NO_COLOR` is respected. Override presentation with `--color
+auto|always|never`, `--emoji`/`--no-emoji`, and
+`--animate`/`--no-animate`.
+
+Launch the live, auto-refreshing terminal dashboard with:
+
+```console
+traci tui . --production-only
+traci tui . --production-only --once --color never
+```
+
+The dashboard summarizes policy health, severity counts, risk, and the most
+important findings. It uses no alternate screen or raw terminal mode, so a
+normal `Ctrl-C` exits cleanly. `--format tui` also renders a one-shot dashboard
+for `traci check`. Machine modes never contain animation, emoji, or ANSI codes.
+
 Exit status is `0` when policy passes, `2` when findings meet the configured
 threshold, and `1` for invalid configuration or I/O errors.
 
@@ -144,6 +178,7 @@ unknown rule codes are errors so a typo cannot silently weaken enforcement.
 [analysis]
 fail_on = "error"
 trace_window = 6
+production_only = false
 require_correlation_id = true
 correlation_fields = ["correlation_id", "request_id", "trace_id"]
 ignore = ["target", ".git", ".kaptaind", ".traci", "tests/fixtures"]
@@ -162,6 +197,11 @@ min_severity = "error"
 command = ""
 webhook_url = ""
 cooldown_seconds = 30
+
+[ui]
+color = "auto"
+emoji = true
+animate = true
 
 [trace]
 provider = "command"

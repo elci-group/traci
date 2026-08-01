@@ -3,6 +3,7 @@ use crate::types::Diagnostic;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Format {
     Text,
+    Tui,
     Json,
     Jsonl,
     Sarif,
@@ -12,6 +13,7 @@ impl Format {
     pub fn parse(value: &str) -> Result<Self, String> {
         match value {
             "text" | "human" => Ok(Self::Text),
+            "tui" => Ok(Self::Tui),
             "json" => Ok(Self::Json),
             "jsonl" | "ndjson" => Ok(Self::Jsonl),
             "sarif" => Ok(Self::Sarif),
@@ -23,6 +25,7 @@ impl Format {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Text => "human",
+            Self::Tui => "tui",
             Self::Json => "json",
             Self::Jsonl => "jsonl",
             Self::Sarif => "sarif",
@@ -33,6 +36,7 @@ impl Format {
 pub fn render(analysis: &Analysis, format: Format) -> String {
     match format {
         Format::Text => render_text(analysis),
+        Format::Tui => crate::ui::render_dashboard(analysis, crate::ui::Style::plain(), "all code"),
         Format::Json => render_json(analysis),
         Format::Jsonl => render_jsonl(analysis),
         Format::Sarif => render_sarif(analysis),

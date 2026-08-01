@@ -565,7 +565,7 @@ fn remove_worktree(repo: &Path, worktree: &Path, force: bool) -> Result<(), Stri
 #[must_use]
 pub fn render_plan(plan: &TracePlan, format: Format) -> String {
     match format {
-        Format::Text => format!(
+        Format::Text | Format::Tui => format!(
             "Traci trace plan\n  goal: {}\n  complexity: {}/100\n  provider: {}\n  model: {}\n  branch: {}\n  apply: {}\n",
             plan.goal,
             plan.complexity_score,
@@ -589,7 +589,7 @@ pub fn render_plan(plan: &TracePlan, format: Format) -> String {
 #[must_use]
 pub fn render_outcome(outcome: &TraceOutcome, format: Format) -> String {
     match format {
-        Format::Text => format!(
+        Format::Text | Format::Tui => format!(
             "Traci trace {}\n  branch: {}\n  {}\n",
             if outcome.merged { "merged" } else { "rejected" },
             outcome.plan.branch,

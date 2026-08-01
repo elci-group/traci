@@ -34,7 +34,9 @@ pub fn collect_rust_files(paths: &[PathBuf], config: &Config) -> Result<Vec<Path
     let mut files = Vec::new();
     for path in paths {
         if path.is_file() {
-            if path.extension().is_some_and(|extension| extension == "rs") {
+            if path.extension().is_some_and(|extension| extension == "rs")
+                && (!config.production_only || is_production_path(path))
+            {
                 files.push(path.clone());
             }
         } else if path.is_dir() {
@@ -59,7 +61,7 @@ fn collect_directory(
     for entry in entries {
         let entry = entry.map_err(|error| format!("cannot read directory entry: {error}"))?;
         let path = entry.path();
-        if config.path_ignored(&path) {
+        if config.path_ignored(&path) || config.production_only && !is_production_path(&path) {
             continue;
         }
         let file_type = entry
@@ -75,6 +77,38 @@ fn collect_directory(
         }
     }
     Ok(())
+}
+
+#[must_use]
+pub fn is_production_path(path: &Path) -> bool {
+    const NON_PRODUCTION_DIRECTORIES: [&str; 9] = [
+        "test",
+        "tests",
+        "benches",
+        "benchmarks",
+        "examples",
+        "fixtures",
+        "fuzz",
+        "fuzz_targets",
+        "snapshots",
+    ];
+    if path.components().any(|component| {
+        component.as_os_str().to_str().is_some_and(|value| {
+            NON_PRODUCTION_DIRECTORIES
+                .iter()
+                .any(|excluded| value.eq_ignore_ascii_case(excluded))
+        })
+    }) {
+        return false;
+    }
+    let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+        return true;
+    };
+    let lower = name.to_ascii_lowercase();
+    !lower.ends_with("_test.rs")
+        && !lower.ends_with("_tests.rs")
+        && !lower.ends_with(".test.rs")
+        && !lower.ends_with(".spec.rs")
 }
 
 pub fn analyze_source(path: &Path, source: &str, config: &Config) -> Vec<Diagnostic> {
@@ -520,5 +554,14 @@ mod tests {
         assert!(findings
             .iter()
             .any(|finding| finding.rule == Rule::MissingCorrelation));
+    }
+
+    #[test]
+    fn production_scope_rejects_non_runtime_paths() {
+        assert!(is_production_path(Path::new("src/service.rs")));
+        assert!(is_production_path(Path::new("src/bin/worker.rs")));
+        assert!(!is_production_path(Path::new("tests/api.rs")));
+        assert!(!is_production_path(Path::new("examples/client.rs")));
+        assert!(!is_production_path(Path::new("src/service_test.rs")));
     }
 }

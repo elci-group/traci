@@ -1,0 +1,4 @@
+interface:
+  display_name: "Traci"
+  short_description: "Enforce observable Rust execution paths"
+  default_prompt: "Use $traci to audit this Rust project and explain the highest-priority observability gaps."

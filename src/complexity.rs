@@ -226,7 +226,7 @@ fn visible_code(line: &str, in_block_comment: &mut bool) -> String {
 #[must_use]
 pub fn render_complexity(report: &ComplexityReport, format: Format) -> String {
     match format {
-        Format::Text => render_human(report),
+        Format::Text | Format::Tui => render_human(report),
         Format::Json | Format::Jsonl => render_json(report),
         Format::Sarif => render_json(report),
     }

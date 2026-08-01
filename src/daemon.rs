@@ -70,6 +70,7 @@ pub fn start(
     config_path: Option<&Path>,
     format: Format,
     interval_ms: Option<u64>,
+    production_only: Option<bool>,
 ) -> Result<u32, String> {
     ensure_state_dir(&config.daemon.state_dir)?;
     if let Some(pid) = read_pid(&config.daemon.state_dir) {
@@ -92,6 +93,13 @@ pub fn start(
     }
     if let Some(interval) = interval_ms {
         command.arg("--interval").arg(interval.to_string());
+    }
+    if let Some(production_only) = production_only {
+        command.arg(if production_only {
+            "--production-only"
+        } else {
+            "--all-code"
+        });
     }
     let child = command
         .stdin(Stdio::null())
@@ -137,7 +145,7 @@ pub fn status(state_dir: &Path, format: Format) -> String {
     let active = pid.is_some_and(process_active);
     let stored = fs::read_to_string(state_dir.join("status.json")).unwrap_or_default();
     match format {
-        Format::Text => format!(
+        Format::Text | Format::Tui => format!(
             "Traci daemon: {}{}\nstate: {}\n",
             if active { "running" } else { "stopped" },
             pid.map_or_else(String::new, |value| format!(" (PID {value})")),
@@ -160,7 +168,7 @@ pub fn status(state_dir: &Path, format: Format) -> String {
 
 fn render_scan(analysis: &Analysis, format: Format) -> String {
     match format {
-        Format::Text | Format::Sarif => render(analysis, format),
+        Format::Text | Format::Tui | Format::Sarif => render(analysis, format),
         Format::Json | Format::Jsonl => {
             format!(
                 "{{\"event\":\"scan\",\"timestamp\":{},\"analysis\":{}}}\n",

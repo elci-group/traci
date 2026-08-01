@@ -6,12 +6,14 @@ use std::process::ExitCode;
 use std::str::FromStr;
 use std::time::Duration;
 use traci::{
-    analyze_paths, complexity, fails_policy, render, trace, Config, Format, Rule, Severity,
+    analyze_paths, complexity, fails_policy, render, trace, ui, ColorChoice, Config, Format, Rule,
+    Severity,
 };
 
 const DEFAULT_POLICY: &str = r#"[analysis]
 fail_on = "error"
 trace_window = 6
+production_only = false
 require_correlation_id = true
 correlation_fields = ["correlation_id", "request_id", "trace_id"]
 ignore = ["target", ".git", ".kaptaind", ".traci"]
@@ -30,6 +32,11 @@ min_severity = "error"
 command = ""
 webhook_url = ""
 cooldown_seconds = 30
+
+[ui]
+color = "auto"
+emoji = true
+animate = true
 
 [trace]
 provider = "command"
@@ -68,6 +75,7 @@ fn run(args: Vec<String>) -> Result<ExitCode, String> {
     match command {
         "check" => run_check(&args[1..]),
         "watch" => run_watch(&args[1..]),
+        "tui" => run_tui(&args[1..]),
         "complexity" => run_complexity(&args[1..]),
         "daemon" => run_daemon(&args[1..]),
         "trace" => run_trace(&args[1..]),
@@ -98,6 +106,10 @@ struct Options {
     fail_on: Option<Severity>,
     interval_ms: Option<u64>,
     once: bool,
+    production_only: Option<bool>,
+    color: Option<ColorChoice>,
+    emoji: Option<bool>,
+    animate: Option<bool>,
 }
 
 fn parse_options(args: &[String], watch: bool) -> Result<Options, String> {
@@ -108,6 +120,10 @@ fn parse_options(args: &[String], watch: bool) -> Result<Options, String> {
         fail_on: None,
         interval_ms: None,
         once: false,
+        production_only: None,
+        color: None,
+        emoji: None,
+        animate: None,
     };
     let mut index = 0;
     while index < args.len() {
@@ -137,6 +153,18 @@ fn parse_options(args: &[String], watch: bool) -> Result<Options, String> {
                 );
             }
             "--once" if watch => options.once = true,
+            "--production-only" => options.production_only = Some(true),
+            "--all-code" => options.production_only = Some(false),
+            "--color" => {
+                index += 1;
+                options.color = Some(ColorChoice::from_str(required_value(
+                    args, index, "--color",
+                )?)?);
+            }
+            "--emoji" => options.emoji = Some(true),
+            "--no-emoji" => options.emoji = Some(false),
+            "--animate" => options.animate = Some(true),
+            "--no-animate" => options.animate = Some(false),
             "-h" | "--help" => {
                 if watch {
                     print_watch_help();
@@ -175,6 +203,18 @@ fn load_config(options: &Options) -> Result<Config, String> {
     if let Some(fail_on) = options.fail_on {
         config.fail_on = fail_on;
     }
+    if let Some(production_only) = options.production_only {
+        config.production_only = production_only;
+    }
+    if let Some(color) = options.color {
+        config.ui.color = color;
+    }
+    if let Some(emoji) = options.emoji {
+        config.ui.emoji = emoji;
+    }
+    if let Some(animate) = options.animate {
+        config.ui.animate = animate;
+    }
     Ok(config)
 }
 
@@ -187,8 +227,18 @@ fn run_check(args: &[String]) -> Result<ExitCode, String> {
         Err(error) => return Err(error),
     };
     let config = load_config(&options)?;
+    let style = ui::Style::stdout(config.ui.color, config.ui.emoji);
+    let spinner = ui::Spinner::start(
+        config.ui.animate && ui::stderr_is_terminal() && matches!(options.format, Format::Text),
+        "Inspecting observable execution paths…",
+        style,
+    );
     let analysis = analyze_paths(&options.paths, &config)?;
-    print!("{}", render(&analysis, options.format));
+    spinner.finish();
+    print!(
+        "{}",
+        render_analysis(&analysis, options.format, &config, style)
+    );
     Ok(if fails_policy(&analysis, config.fail_on) {
         ExitCode::from(2)
     } else {
@@ -197,6 +247,14 @@ fn run_check(args: &[String]) -> Result<ExitCode, String> {
 }
 
 fn run_watch(args: &[String]) -> Result<ExitCode, String> {
+    run_watch_mode(args, false)
+}
+
+fn run_tui(args: &[String]) -> Result<ExitCode, String> {
+    run_watch_mode(args, true)
+}
+
+fn run_watch_mode(args: &[String], force_tui: bool) -> Result<ExitCode, String> {
     let options = match parse_options(args, true) {
         Ok(options) => options,
         // traci: allow - these branches propagate to the structured CLI boundary.
@@ -204,6 +262,10 @@ fn run_watch(args: &[String]) -> Result<ExitCode, String> {
         // traci: allow - these branches propagate to the structured CLI boundary.
         Err(error) => return Err(error),
     };
+    let mut options = options;
+    if force_tui {
+        options.format = Format::Tui;
+    }
     let mut config = load_config(&options)?;
     if let Some(interval) = options.interval_ms {
         if interval < 50 {
@@ -217,17 +279,27 @@ fn run_watch(args: &[String]) -> Result<ExitCode, String> {
         // traci: allow - main records this option error with structured context.
         return Err("--interval must be at least 50 milliseconds".into());
     }
-    eprintln!(
-        "Traci is watching {} path(s) every {interval} ms; press Ctrl-C to stop",
-        options.paths.len()
-    );
+    let style = ui::Style::stdout(config.ui.color, config.ui.emoji);
+    if options.format == Format::Tui && !style.interactive && !options.once {
+        // traci: allow - this CLI validation error is emitted at the structured boundary.
+        return Err("the live TUI requires a terminal; use --once for a static dashboard".into());
+    }
+    if options.format != Format::Tui {
+        eprintln!(
+            "Traci is watching {} path(s) every {interval} ms; press Ctrl-C to stop",
+            options.paths.len()
+        );
+    }
     traci::watch::watch(
         &options.paths,
         &config,
         Duration::from_millis(interval),
         options.once,
         |analysis| {
-            print!("{}", render(analysis, options.format));
+            print!(
+                "{}",
+                render_analysis(analysis, options.format, &config, style)
+            );
             if let Err(error) = io::stdout().flush() {
                 eprintln!("level=error operation=flush_watch_output error={error}");
             }
@@ -239,8 +311,22 @@ fn run_watch(args: &[String]) -> Result<ExitCode, String> {
 fn run_complexity(args: &[String]) -> Result<ExitCode, String> {
     let options = parse_options(args, false)?;
     let config = load_config(&options)?;
+    let style = ui::Style::stdout(config.ui.color, config.ui.emoji);
+    let spinner = ui::Spinner::start(
+        config.ui.animate && ui::stderr_is_terminal() && matches!(options.format, Format::Text),
+        "Approximating trace implementation complexity…",
+        style,
+    );
     let report = complexity::estimate_paths(&options.paths, &config)?;
-    println!("{}", complexity::render_complexity(&report, options.format));
+    spinner.finish();
+    if matches!(options.format, Format::Text | Format::Tui) {
+        print!(
+            "{}",
+            ui::render_complexity(&report, style, scope_label(&config))
+        );
+    } else {
+        println!("{}", complexity::render_complexity(&report, options.format));
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -250,6 +336,7 @@ fn run_daemon(args: &[String]) -> Result<ExitCode, String> {
         .ok_or_else(|| "usage: traci daemon start|run|stop|status [OPTIONS]".to_string())?;
     let options = parse_options(&args[1..], matches!(action.as_str(), "start" | "run"))?;
     let mut config = load_config(&options)?;
+    let style = ui::Style::stdout(config.ui.color, config.ui.emoji);
     if let Some(interval) = options.interval_ms {
         if interval < 50 {
             // traci: allow - main records command validation failures.
@@ -263,15 +350,23 @@ fn run_daemon(args: &[String]) -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         "start" => {
+            if options.format == Format::Tui {
+                // traci: allow - this CLI validation error is emitted at the structured boundary.
+                return Err("detached daemons cannot use TUI output; run `traci tui`".into());
+            }
             let pid = traci::daemon::start(
                 &options.paths,
                 &config,
                 options.config_path.as_deref(),
                 options.format,
                 options.interval_ms,
+                options.production_only,
             )?;
             if options.format == Format::Text {
-                println!("Traci daemon started as PID {pid}");
+                println!(
+                    "{}",
+                    ui::notice(&format!("Traci daemon started as PID {pid}"), style, true)
+                );
             } else {
                 println!("{{\"event\":\"daemon_started\",\"pid\":{pid}}}");
             }
@@ -280,7 +375,10 @@ fn run_daemon(args: &[String]) -> Result<ExitCode, String> {
         "stop" => {
             let pid = traci::daemon::stop(&config.daemon.state_dir)?;
             if options.format == Format::Text {
-                println!("Traci daemon PID {pid} stopped");
+                println!(
+                    "{}",
+                    ui::notice(&format!("Traci daemon PID {pid} stopped"), style, true)
+                );
             } else {
                 println!("{{\"event\":\"daemon_stopped\",\"pid\":{pid}}}");
             }
@@ -306,6 +404,10 @@ fn run_trace(args: &[String]) -> Result<ExitCode, String> {
     let mut format = Format::Text;
     let mut goal = None;
     let mut apply = false;
+    let mut production_only = None;
+    let mut color = None;
+    let mut emoji = None;
+    let mut animate = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -322,6 +424,18 @@ fn run_trace(args: &[String]) -> Result<ExitCode, String> {
                 goal = Some(required_value(args, index, "--goal")?.to_string());
             }
             "--apply" => apply = true,
+            "--production-only" => production_only = Some(true),
+            "--all-code" => production_only = Some(false),
+            "--color" => {
+                index += 1;
+                color = Some(ColorChoice::from_str(required_value(
+                    args, index, "--color",
+                )?)?);
+            }
+            "--emoji" => emoji = Some(true),
+            "--no-emoji" => emoji = Some(false),
+            "--animate" => animate = Some(true),
+            "--no-animate" => animate = Some(false),
             option if option.starts_with('-') => {
                 // traci: allow - main records command validation failures.
                 return Err(format!("unknown trace option '{option}'"));
@@ -341,10 +455,25 @@ fn run_trace(args: &[String]) -> Result<ExitCode, String> {
         fail_on: None,
         interval_ms: None,
         once: false,
+        production_only,
+        color,
+        emoji,
+        animate,
     };
     let config = load_config(&options)?;
+    let style = ui::Style::stdout(config.ui.color, config.ui.emoji);
+    let spinner = ui::Spinner::start(
+        config.ui.animate && ui::stderr_is_terminal() && matches!(format, Format::Text),
+        "Scoring code and selecting the safest model…",
+        style,
+    );
     let plan = trace::plan(&paths, &goal, &config, apply)?;
-    print!("{}", trace::render_plan(&plan, format));
+    spinner.finish();
+    if matches!(format, Format::Text | Format::Tui) {
+        print!("{}", ui::render_trace_plan(&plan, style));
+    } else {
+        print!("{}", trace::render_plan(&plan, format));
+    }
     if !apply {
         return Ok(ExitCode::SUCCESS);
     }
@@ -365,7 +494,11 @@ fn run_trace(args: &[String]) -> Result<ExitCode, String> {
             return Err(error);
         }
     };
-    print!("{}", trace::render_outcome(&outcome, format));
+    if matches!(format, Format::Text | Format::Tui) {
+        print!("{}", ui::render_trace_outcome(&outcome, style));
+    } else {
+        print!("{}", trace::render_outcome(&outcome, format));
+    }
     notify_trace(
         &config,
         if outcome.merged {
@@ -411,6 +544,27 @@ fn notify_trace(
     };
     for error in notifier.emit(&notification) {
         eprintln!("level=error operation=deliver_trace_notification error={error}");
+    }
+}
+
+fn render_analysis(
+    analysis: &traci::Analysis,
+    format: Format,
+    config: &Config,
+    style: ui::Style,
+) -> String {
+    match format {
+        Format::Text => ui::render_human(analysis, style, scope_label(config)),
+        Format::Tui => ui::render_dashboard(analysis, style, scope_label(config)),
+        Format::Json | Format::Jsonl | Format::Sarif => render(analysis, format),
+    }
+}
+
+fn scope_label(config: &Config) -> &'static str {
+    if config.production_only {
+        "production"
+    } else {
+        "all code"
     }
 }
 
@@ -472,27 +626,31 @@ fn print_rules() {
 
 fn print_help() {
     println!(
-        "Traci {} — observability enforcement for Rust\n\n\
+        "🔭 Traci {} — observability enforcement for Rust\n\n\
          Usage:\n  traci check [PATH...] [OPTIONS]\n  traci complexity [PATH...] [OPTIONS]\n  \
          traci daemon start|run|stop|status [PATH...] [OPTIONS]\n  \
          traci trace [PATH...] --goal TEXT [--apply] [OPTIONS]\n  \
-         traci watch [PATH...] [OPTIONS]\n  traci rules\n  traci explain RULE\n  \
+         traci watch [PATH...] [OPTIONS]\n  traci tui [PATH...] [OPTIONS]\n  traci rules\n  traci explain RULE\n  \
          traci init [--force]\n\n\
-         Human output is the default; use --format json, jsonl, or sarif for machines.",
+         Scope: --production-only excludes tests, benches, examples, fixtures, fuzz, and snapshots.\n\
+         Presentation: --format tui, --color auto|always|never, --[no-]emoji, --[no-]animate.\n\
+         Human output is styled on terminals; json, jsonl, and sarif remain machine-clean.",
         env!("CARGO_PKG_VERSION")
     );
 }
 
 fn print_check_help() {
     println!(
-        "Usage: traci check [PATH...] [--config FILE] [--format human|json|jsonl|sarif] \
-         [--fail-on info|warning|error|critical]"
+        "Usage: traci check [PATH...] [--config FILE] [--format human|tui|json|jsonl|sarif] \
+         [--fail-on LEVEL] [--production-only|--all-code] [--color MODE] \
+         [--emoji|--no-emoji] [--animate|--no-animate]"
     );
 }
 
 fn print_watch_help() {
     println!(
-        "Usage: traci watch [PATH...] [--config FILE] [--format human|json|jsonl|sarif] \
-         [--fail-on LEVEL] [--interval MS] [--once]"
+        "Usage: traci watch|tui [PATH...] [--config FILE] \
+         [--format human|tui|json|jsonl|sarif] [--fail-on LEVEL] [--interval MS] [--once] \
+         [--production-only|--all-code] [--color MODE] [--emoji|--no-emoji]"
     );
 }
