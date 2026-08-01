@@ -48,7 +48,27 @@ forbid_regex = ["TODO", "FIXME", "unimplemented!", "todo!"]
 [[file]]
 path = "README.md"
 required = true
-require_regex = ["traci check", "traci daemon", "traci complexity", "traci trace", "traci tui", "--production-only", "Kaptaind", "--apply"]
+require_regex = ["assets/traci-logo.png", "Quick start", "traci check", "traci daemon", "traci complexity", "traci trace", "traci tui", "--production-only", "--apply", "CONTRIBUTING.md", "SECURITY.md", "docs/ROADMAP.md"]
+
+[[file]]
+path = "docs/ARCHITECTURE.md"
+required = true
+require_regex = ["Data flow", "Trust boundaries", "Verification layers"]
+
+[[file]]
+path = "docs/ROADMAP.md"
+required = true
+require_regex = ["Roadmap", "Milestone 1", "Milestone 2", "Milestone 3", "A- definition of done"]
+
+[[file]]
+path = "CONTRIBUTING.md"
+required = true
+require_regex = ["Required gates", "Pull requests"]
+
+[[file]]
+path = "SECURITY.md"
+required = true
+require_regex = ["Report a vulnerability", "Security model"]
 
 [[file]]
 path = "kaptaind.toml"
@@ -67,8 +87,22 @@ expect_exit = 0
 timeout_secs = 60
 
 [[command]]
+name = "logo-asset"
+cmd = ["file", "assets/traci-logo.png"]
+expect_exit = 0
+timeout_secs = 30
+stdout_contains = ["PNG image data", "1254 x 1254", "RGBA"]
+
+[[command]]
 name = "lint"
 cmd = ["cargo", "clippy", "--all-targets", "--", "-D", "warnings"]
+expect_exit = 0
+timeout_secs = 180
+
+[[command]]
+name = "rustdoc"
+cmd = ["cargo", "doc", "--no-deps"]
+env = { RUSTDOCFLAGS = "-Dwarnings" }
 expect_exit = 0
 timeout_secs = 180
 
@@ -81,7 +115,7 @@ stdout_contains = ["test result: ok"]
 
 [[command]]
 name = "self-check"
-cmd = ["cargo", "run", "--quiet", "--", "check", "src", "--format", "text"]
+cmd = ["cargo", "run", "--quiet", "--", "check", ".", "--production-only", "--fail-on", "warning", "--format", "text"]
 expect_exit = 0
 timeout_secs = 180
 

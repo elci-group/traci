@@ -1,175 +1,148 @@
-# Traci
+<p align="center">
+  <img src="assets/traci-logo.png" width="184" alt="Traci logo: a cyan telemetry trace with three coral event nodes inside a midnight hexagon">
+</p>
 
-Traci is a deliberately pedantic observability enforcement daemon for Rust. It
-treats reconstructable telemetry as part of software correctness: if an
+<h1 align="center">Traci</h1>
+
+<p align="center">
+  Pedantic observability enforcement for Rust.<br>
+  Make every failure path reconstructable before it reaches production.
+</p>
+
+<p align="center">
+  <a href="https://github.com/elci-group/traci/actions/workflows/ci.yml"><img src="https://github.com/elci-group/traci/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-38D9FF.svg" alt="MIT license"></a>
+  <img src="https://img.shields.io/badge/Rust-1.74%2B-FF6B6B.svg" alt="Rust 1.74 or newer">
+  <img src="https://img.shields.io/badge/dependencies-0-101827.svg" alt="Zero third-party Rust dependencies">
+</p>
+
+Traci treats reconstructable telemetry as part of software correctness. If an
 engineer cannot establish what failed, where, why, and under which request or
-task from telemetry alone, Traci reports the path as incomplete.
+task from telemetry alone, Traci reports the execution path as incomplete.
 
-Traci complements Kaptaind. Kaptaind protects version integrity by classifying
-and committing changes; Traci protects observability integrity by examining the
-execution paths those changes introduce.
+It is a fast, dependency-free lexical analyzer: it does not compile the target
+project, does not contact a network service, and never changes inspected source
+code during `check` or `complexity`.
 
-## What it enforces
+## Quick start
 
-| Rule | Default | Finding |
+```console
+git clone https://github.com/elci-group/traci.git
+cd traci
+cargo install --path .
+traci check src
+```
+
+A healthy project exits `0`:
+
+```text
+TRACI  OBSERVABILITY GATE · ALL CODE
+OK  All inspected execution paths are observable.
+SUMMARY  12 file(s) · 0 finding(s) · 0 warning · 0 error · 0 critical
+```
+
+Use the production scope and fail on warnings in CI:
+
+```console
+traci check . --production-only --fail-on warning --color never --no-emoji
+```
+
+## What Traci catches
+
+| Rule | Default severity | Finding |
 | --- | --- | --- |
 | `TRC001` | Error | Error return or handler has no nearby event |
 | `TRC002` | Error | A `Result` is discarded with `.ok()` or `let _ =` |
-| `TRC003` | Warning | A diagnostic says only "failed" or another generic message |
+| `TRC003` | Warning | A diagnostic says only “failed” or another generic message |
 | `TRC004` | Warning | A trace event contains no structured fields |
 | `TRC005` | Error | Spawned async work does not preserve its span |
 | `TRC006` | Warning | `map_err` discards the source error |
 | `TRC007` | Critical | `unwrap` or `expect` creates an opaque panic path |
 | `TRC008` | Warning | A public async boundary has no configured correlation field |
 
-The analyzer is intentionally dependency-free. It performs fast lexical
-analysis without compiling the target and ignores strings, comments, unit-test
-modules, symlinks, generated output, and configured paths. A narrow escape
-hatch, `// traci: allow`, suppresses a deliberately reviewed line (or the line
-immediately after it), making intentional propagation visible in review.
-
-## Install and run
-
-```console
-cargo install --path .
-traci check src
-traci check crates/service --format json --fail-on warning
-traci check crates/service --format jsonl
-traci check . --format sarif > traci.sarif
-```
-
-Human output is the default. `json` is a compact document for API/CI consumers,
-`jsonl`/`ndjson` emits streaming records for log pipelines, and `sarif` targets
-code-scanning systems. Machine modes never add decoration or ANSI colour.
-
-## Production scope and terminal UI
-
-Limit every file-based operation to deployable code with `--production-only`:
-
-```console
-traci check . --production-only
-traci complexity . --production-only
-traci daemon start . --production-only
-traci trace . --production-only --goal "instrument production error paths"
-```
-
-This scope excludes `test`/`tests`, benches, benchmarks, examples, fixtures,
-fuzz targets, snapshots, and conventional `_test.rs`, `.test.rs`, and
-`.spec.rs` files. `--all-code` explicitly overrides a policy that enables
-production scope. Configured ignore rules still apply in both modes.
-
-Human output automatically gains colour, emoji, and a short progress animation
-when attached to a compatible terminal. Redirected output stays undecorated;
-`NO_COLOR` is respected. Override presentation with `--color
-auto|always|never`, `--emoji`/`--no-emoji`, and
-`--animate`/`--no-animate`.
-
-Launch the live, auto-refreshing terminal dashboard with:
-
-```console
-traci tui . --production-only
-traci tui . --production-only --once --color never
-```
-
-The dashboard summarizes policy health, severity counts, risk, and the most
-important findings. It uses no alternate screen or raw terminal mode, so a
-normal `Ctrl-C` exits cleanly. `--format tui` also renders a one-shot dashboard
-for `traci check`. Machine modes never contain animation, emoji, or ANSI codes.
-
-Exit status is `0` when policy passes, `2` when findings meet the configured
-threshold, and `1` for invalid configuration or I/O errors.
-
-Estimate implementation complexity without compiling the target:
-
-```console
-traci complexity src
-traci complexity src --format json
-```
-
-The `0..100` approximation combines non-empty lines, functions, branches,
-error propagation points, async boundaries, concurrency primitives, maximum
-brace nesting, and project breadth. It is a routing signal, not a claim of
-cyclomatic precision. Traci reports both the aggregate and the hottest files.
-
-## Daemon and notifications
-
-Start the persistent polling daemon during development:
-
-```console
-traci daemon start src
-traci daemon status
-traci daemon stop
-traci daemon run src --format jsonl
-traci daemon run src --once --format jsonl
-```
-
-The detached process stores its PID, atomic `status.json`, and append-only logs
-under `.traci/`. It rescans only when a Rust file is created, removed, resized,
-or modified. `traci watch` remains a foreground-compatible alias.
-
-When the finding count changes, notifications can fan out to:
-
-- a concise human console event;
-- a trusted local command, with notification JSON on stdin and `TRACI_EVENT`,
-  `TRACI_SEVERITY`, `TRACI_TITLE`, and `TRACI_BODY` environment variables;
-- an HTTP JSON webhook through `curl`.
-
-Severity thresholds and cooldowns suppress noisy, repeated delivery. Failed
-channels are recorded but never stop enforcement.
-
-## Guarded LLM improvement with `traci trace`
-
-Planning is safe and non-mutating:
-
-```console
-traci trace src --goal "reduce branching in the scanner"
-traci trace src --goal "simplify the scanner" --format json
-```
-
-Traci computes complexity first, selects the configured low, medium, or high
-model, and prints the provider/model/branch decision. It does not contact the
-provider or touch Git unless `--apply` is explicit:
-
-```console
-traci trace src --goal "reduce branching in the scanner" --apply
-```
-
-The applying pipeline is deliberately transactional:
-
-```text
-score → select model → baseline benchmark → isolated Git worktree
-      → LLM unified diff → path-scope check → candidate analysis
-      → repeated benchmark → regression gates → candidate commit
-      → fast-forward merge only on success
-```
-
-The monitored checkout remains untouched while the LLM works. Generated diffs
-are size-limited and may only change the requested paths. Traci rejects
-increased observability findings, excessive complexity, failed tests, and
-benchmark regressions beyond policy. A benchmarked but rejected candidate is
-committed on its branch for inspection; it is never merged. Provider or scope
-failures are discarded before evaluation.
-
-Providers are local adapters:
-
-- `provider = "command"` runs a trusted configured command, sends the prompt on
-  stdin, and exports `TRACI_MODEL`, `TRACI_GOAL`, and
-  `TRACI_COMPLEXITY_SCORE`.
-- `provider = "ollama"` runs `ollama run <selected-model>`.
-
-The provider must return a unified diff beginning with `diff --git`. The generic
-command adapter can front any hosted LLM CLI without putting credentials in
-Traci configuration.
-
-Inspect or explain the policy surface:
+Inspect the active policy from the CLI:
 
 ```console
 traci rules
 traci explain TRC005
-traci init
 ```
 
-## Policy
+The analyzer ignores strings, comments, unit-test modules, symlinks, generated
+output, and configured paths. A narrow `// traci: allow` comment suppresses a
+deliberately reviewed line or the immediately following line. Prefer real
+instrumentation; every allowance should explain why propagation is safe.
+
+## Instrumentation Traci accepts
+
+Record the operation, stable identifiers, correlation context, and source
+error:
+
+```rust,ignore
+error!(
+    operation = "load_customer",
+    customer_id,
+    correlation_id,
+    retry = attempt,
+    error = %source,
+    "primary database timed out"
+);
+return Err(DatabaseError::Timeout);
+```
+
+Preserve the current span across spawned work:
+
+```rust,ignore
+use tracing::Instrument;
+
+tokio::spawn(async move {
+    refresh_customer(customer_id).await;
+}.instrument(tracing::Span::current()));
+```
+
+## Command map
+
+| Command | Purpose |
+| --- | --- |
+| `traci check [PATH...]` | Enforce the configured observability policy |
+| `traci complexity [PATH...]` | Estimate instrumentation and refactoring difficulty |
+| `traci watch [PATH...]` | Rescan in the foreground when Rust files change |
+| `traci tui [PATH...]` | Show a live terminal dashboard |
+| `traci daemon start\|run\|status\|stop` | Manage persistent monitoring |
+| `traci trace [PATH...] --goal TEXT` | Plan a guarded LLM-assisted improvement |
+| `traci rules` | List rule codes and severities |
+| `traci explain RULE` | Explain one rule and its remediation |
+| `traci init` | Create a starter `traci.toml` without overwriting policy |
+
+Exit status is `0` when policy passes, `2` when findings meet the configured
+threshold, and `1` for configuration or I/O failure.
+
+## Scope and output
+
+`--production-only` excludes tests, benches, examples, fixtures, fuzz targets,
+snapshots, and test/spec filename conventions. `--all-code` overrides a policy
+that enables production scope. Configured ignore paths still apply.
+
+```console
+traci check . --production-only
+traci complexity . --production-only --format json
+traci daemon run . --production-only --once --format jsonl
+traci check . --format sarif > traci.sarif
+```
+
+Human output may use color, emoji, and a short progress animation on a terminal.
+Redirected output stays undecorated, and `NO_COLOR` is respected. JSON, JSONL,
+and SARIF never contain presentation control sequences.
+
+```console
+traci tui . --production-only
+traci tui . --production-only --once --color never --no-emoji
+```
+
+The complexity score is a `0..100` routing signal, not cyclomatic complexity.
+It combines code size, functions, branches, error propagation, async and
+concurrency boundaries, nesting, and project breadth.
+
+## Configuration
 
 Traci discovers `traci.toml` from the first scan path upward. Unknown keys and
 unknown rule codes are errors so a typo cannot silently weaken enforcement.
@@ -184,86 +157,61 @@ correlation_fields = ["correlation_id", "request_id", "trace_id"]
 ignore = ["target", ".git", ".kaptaind", ".traci", "tests/fixtures"]
 enabled_rules = ["TRC001", "TRC002", "TRC003", "TRC004", "TRC005", "TRC006", "TRC007", "TRC008"]
 
-[watch]
-interval_ms = 750
-
-[daemon]
-state_dir = ".traci"
-
-[notifications]
-enabled = true
-console = true
-min_severity = "error"
-command = ""
-webhook_url = ""
-cooldown_seconds = 30
-
 [ui]
 color = "auto"
 emoji = true
 animate = true
-
-[trace]
-provider = "command"
-provider_command = "codex exec --model $TRACI_MODEL -"
-low_model = "fast"
-medium_model = "balanced"
-high_model = "deep"
-medium_threshold = 35
-high_threshold = 70
-branch_prefix = "traci/trace"
-benchmark_command = "cargo test --all-targets"
-benchmark_runs = 3
-max_regression_percent = 10
-max_complexity_increase = 0
-max_diagnostic_increase = 0
-max_context_bytes = 120000
-max_patch_bytes = 250000
-require_clean = true
 ```
 
-For a reviewed exception, place `// traci: allow` on the line. Prefer policy
-improvements or real instrumentation over broad suppressions.
+See [the configuration reference](skills/traci/references/configuration.md) for
+watch intervals, notification channels, model routing, and regression gates.
+Treat notification commands, webhooks, provider commands, and benchmark
+commands as executable security boundaries; keep credentials out of TOML.
 
-## Instrumentation Traci accepts
-
-```rust,ignore
-error!(
-    operation = "load_customer",
-    customer_id = customer_id,
-    correlation_id = correlation_id,
-    retry = attempt,
-    error = %source,
-    "primary database timed out"
-);
-return Err(DatabaseError::Timeout);
-```
-
-For spawned futures, preserve the active span explicitly:
-
-```rust,ignore
-use tracing::Instrument;
-
-tokio::spawn(async move {
-    refresh_customer(customer_id).await;
-}.instrument(tracing::Span::current()));
-```
-
-## Kaptaind monitoring
-
-This repository includes `kaptaind.toml` and `.kaptainignore`. Kaptaind watches
-the repository, clusters related edits, computes semantic version impact,
-runs `cargo test --all-targets` as a required pre-commit gate, updates
-`VERSION`, and creates local deterministic commits. Network pushing is disabled.
+## Daemon and notifications
 
 ```console
-kaptaind-cli -r . analyze
-kaptaind --daemon
-kaptaind-cli -r . status
-kaptaind-cli -r . log --limit 20
+traci daemon start src --production-only
+traci daemon status
+traci daemon stop
+traci daemon run src --once --format jsonl
 ```
 
-Runtime state lives under `.kaptaind/` and is ignored by both Git and Kaptaind.
+Detached state, PID data, and append-only logs live under `.traci/`. The daemon
+rescans when Rust files are created, removed, resized, or modified.
+Notifications can target the console, a trusted local command, or an HTTP JSON
+webhook. Channel failures are recorded without disabling enforcement.
+
+## Guarded LLM improvement
+
+Planning is read-only:
+
+```console
+traci trace src --goal "reduce branching in the analyzer"
+traci trace src --goal "preserve span context" --format json
+```
+
+Only `--apply` enables mutation. The pipeline benchmarks the baseline, creates
+an isolated Git worktree, accepts a path-limited unified diff, repeats the
+benchmark, rejects diagnostic or complexity regressions, commits the candidate,
+and fast-forwards only after every gate passes.
+
+```text
+score → select model → baseline benchmark → isolated worktree
+      → scoped patch → candidate analysis → repeated benchmark
+      → regression gates → candidate commit → fast-forward or reject
+```
+
+Provider and scope failures are discarded. A benchmarked but rejected candidate
+may remain on its branch for inspection and is never merged automatically.
+
+## Project documentation
+
+- [Architecture and trust boundaries](docs/ARCHITECTURE.md)
+- [Contribution guide](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [Path from B+ to A-](docs/ROADMAP.md)
+- [Agent skill](skills/traci/SKILL.md)
 
 ## Development
 
@@ -271,11 +219,16 @@ Runtime state lives under `.kaptaind/` and is ignored by both Git and Kaptaind.
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test --all-targets
-cargo run -- check src
-cargo run -- complexity src --format json
-cargo run -- trace src --goal "reduce complexity" --format json
+env RUSTDOCFLAGS=-Dwarnings cargo doc --no-deps
+cargo run -- check . --production-only --fail-on warning
 deliver --spec deliver.toml --strict
 ```
 
-The repository has no third-party Rust dependencies. CI runs formatting,
-Clippy, tests, and a Traci self-check on every push and pull request.
+The project forbids unsafe Rust, denies Clippy warnings, and has no third-party
+Rust dependencies. CI runs formatting, linting, warning-free Rustdoc, tests,
+strict production self-analysis, complexity, daemon, TUI, and trace-plan checks
+on every push and pull request.
+
+## License
+
+Traci is available under the [MIT License](LICENSE).
