@@ -6,8 +6,8 @@ use std::process::ExitCode;
 use std::str::FromStr;
 use std::time::Duration;
 use traci::{
-    analyze_paths, complexity, fails_policy, render, trace, ui, ColorChoice, Config, Format, Rule,
-    Severity,
+    analyze_paths, complexity, fails_policy, render, trace, ui, ColorChoice, Config, EnforceOptions,
+    Format, Rule, Severity,
 };
 
 const DEFAULT_POLICY: &str = r#"[analysis]
@@ -78,6 +78,7 @@ fn run(args: Vec<String>) -> Result<ExitCode, String> {
         "tui" => run_tui(&args[1..]),
         "complexity" => run_complexity(&args[1..]),
         "daemon" => run_daemon(&args[1..]),
+        "enforce" => run_enforce(&args[1..]),
         "trace" => run_trace(&args[1..]),
         "rules" => {
             print_rules();
@@ -613,6 +614,82 @@ fn run_init(args: &[String]) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+fn run_enforce(args: &[String]) -> Result<ExitCode, String> {
+    let mut repo_url = None;
+    let mut fork_owner = None;
+    let mut kaptaind_url = None;
+    let mut auto_push = false;
+    let mut create_pr = false;
+    let mut index = 0;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--repo" => {
+                index += 1;
+                repo_url = Some(required_value(args, index, "--repo")?.to_string());
+            }
+            "--fork-owner" => {
+                index += 1;
+                fork_owner = Some(required_value(args, index, "--fork-owner")?.to_string());
+            }
+            "--kaptaind" => {
+                index += 1;
+                kaptaind_url = Some(required_value(args, index, "--kaptaind")?.to_string());
+            }
+            "--push" => auto_push = true,
+            "--create-pr" => create_pr = true,
+            option if option.starts_with('-') => {
+                // traci: allow - main records this option error with structured context.
+                return Err(format!("unknown enforce option '{option}'"));
+            }
+            _ => {
+                // traci: allow - main records this option error with structured context.
+                return Err("unexpected positional argument".into());
+            }
+        }
+        index += 1;
+    }
+
+    let repo_url = repo_url.ok_or_else(|| "enforce requires --repo URL".to_string())?;
+    let options = EnforceOptions {
+        repo_url,
+        fork_owner,
+        target_branch: "main".into(),
+        kaptaind_url,
+        auto_push,
+        create_pr,
+    };
+
+    let config = Config::discover(&PathBuf::from("."))?
+        .0;
+
+    let style = ui::Style::stdout(config.ui.color, config.ui.emoji);
+    let spinner = ui::Spinner::start(
+        config.ui.animate && ui::stderr_is_terminal(),
+        "Enforcing tracing requirements…",
+        style,
+    );
+
+    match traci::enforce(options, &config) {
+        Ok(outcome) => {
+            spinner.finish();
+            println!(
+                "{}",
+                ui::notice(&format!(
+                    "✓ {}\n  Branch: {}\n  Fork: {}",
+                    outcome.message, outcome.branch, outcome.fork_url
+                ), style, true)
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(error) => {
+            spinner.finish();
+            eprintln!("level=error operation=enforce error={error}");
+            Err(error)
+        }
+    }
+}
+
 fn print_rules() {
     for rule in Rule::ALL {
         println!(
@@ -629,6 +706,7 @@ fn print_help() {
         "🔭 Traci {} — observability enforcement for Rust\n\n\
          Usage:\n  traci check [PATH...] [OPTIONS]\n  traci complexity [PATH...] [OPTIONS]\n  \
          traci daemon start|run|stop|status [PATH...] [OPTIONS]\n  \
+         traci enforce --repo URL [--fork-owner NAME] [--kaptaind URL] [--push] [--create-pr]\n  \
          traci trace [PATH...] --goal TEXT [--apply] [OPTIONS]\n  \
          traci watch [PATH...] [OPTIONS]\n  traci tui [PATH...] [OPTIONS]\n  traci rules\n  traci explain RULE\n  \
          traci init [--force]\n\n\
