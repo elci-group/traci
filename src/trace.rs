@@ -307,6 +307,62 @@ fn build_prompt(plan: &TracePlan, complexity: &ComplexityReport, context: &str) 
     )
 }
 
+/// Admits `provider = "command"` delegate invocations through the shared
+/// ingauge quota gate before spawning. `provider_command` is an opaque shell
+/// command traci can't otherwise attribute to a specific LLM backend, so
+/// `trace.gate_provider` optionally names the real one; unset falls back to
+/// a generic "traci-command" label that still bounds concurrency. `ollama`
+/// runs a model locally with no shared quota to protect, so it's never
+/// gated — `for_command` returns `None` for any provider other than
+/// `"command"`.
+struct DelegateGate {
+    provider: String,
+    admitter: ingauge_gate::Admitter,
+    runtime: tokio::runtime::Runtime,
+}
+
+impl DelegateGate {
+    fn for_command(config: &Config) -> Option<Self> {
+        if config.trace.provider != "command" {
+            return None;
+        }
+        let runtime = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                eprintln!("traci: ingauge gate runtime unavailable, proceeding ungated: {error}");
+                return None;
+            }
+        };
+        Some(Self {
+            provider: config
+                .trace
+                .gate_provider
+                .clone()
+                .unwrap_or_else(|| "traci-command".to_string()),
+            admitter: ingauge_gate::Admitter::from_env(),
+            runtime,
+        })
+    }
+
+    fn admit(&self) {
+        let _ = self.runtime.block_on(self.admitter.wait_and_admit(
+            self.provider.as_str(),
+            Option::<String>::None,
+            None,
+        ));
+    }
+
+    fn complete(&self) {
+        self.runtime.block_on(
+            self.admitter
+                .complete(self.provider.as_str(), Option::<String>::None),
+        );
+    }
+}
+
 fn run_provider(
     worktree: &Path,
     plan: &TracePlan,
@@ -332,6 +388,12 @@ fn run_provider(
             return Err(format!("unsupported trace provider '{other}'"));
         }
     };
+
+    let gate = DelegateGate::for_command(config);
+    if let Some(gate) = &gate {
+        gate.admit();
+    }
+
     let mut child = command
         .current_dir(worktree)
         .env("TRACI_MODEL", &plan.model)
@@ -350,6 +412,11 @@ fn run_provider(
     let output = child
         .wait_with_output()
         .map_err(|error| format!("cannot wait for trace provider: {error}"))?;
+
+    if let Some(gate) = &gate {
+        gate.complete();
+    }
+
     if !output.status.success() {
         // traci: allow - provider stderr is returned with its failing status.
         return Err(format!(

@@ -46,6 +46,13 @@ pub struct UiConfig {
 pub struct TraceConfig {
     pub provider: String,
     pub provider_command: Option<String>,
+    /// Names the real LLM provider `provider_command` actually invokes (e.g.
+    /// "anthropic", "groq"), so the ingauge admission gate can admit against
+    /// the shared quota it really consumes. `provider_command` is an opaque
+    /// shell command traci can't otherwise attribute; unset falls back to a
+    /// generic "traci-command" gate label that still bounds concurrency
+    /// without knowing the specific backend.
+    pub gate_provider: Option<String>,
     pub low_model: String,
     pub medium_model: String,
     pub high_model: String,
@@ -101,6 +108,7 @@ impl Default for Config {
             trace: TraceConfig {
                 provider: "command".into(),
                 provider_command: None,
+                gate_provider: None,
                 low_model: "small".into(),
                 medium_model: "medium".into(),
                 high_model: "large".into(),
@@ -225,6 +233,9 @@ impl Config {
                 ("trace", "provider") => config.trace.provider = unquote(value)?,
                 ("trace", "provider_command") => {
                     config.trace.provider_command = parse_optional_string(value)?;
+                }
+                ("trace", "gate_provider") => {
+                    config.trace.gate_provider = parse_optional_string(value)?;
                 }
                 ("trace", "low_model") => config.trace.low_model = unquote(value)?,
                 ("trace", "medium_model") => config.trace.medium_model = unquote(value)?,

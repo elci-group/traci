@@ -18,6 +18,8 @@ name = "traci"
 path = "src/main.rs"
 
 [dependencies]
+ingauge-gate = { git = "https://github.com/elci-group/ingauge.git", package = "ingauge-gate" }
+tokio = { version = "1", default-features = false, features = ["rt"] }
 
 [profile.release]
 lto = "thin"
