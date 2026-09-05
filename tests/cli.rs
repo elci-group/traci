@@ -29,7 +29,7 @@ impl Fixture {
     fn traci(&self, arguments: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_traci"))
             .args(arguments)
-            .arg(&self.root)
+            .current_dir(&self.root)
             .output()
             .expect("run Traci")
     }
@@ -95,4 +95,42 @@ fn static_tui_renders_a_production_dashboard() {
     assert!(stdout.contains("PRODUCTION"));
     assert!(stdout.contains('╭'));
     assert!(!stdout.contains("\x1b["));
+}
+
+#[test]
+fn brace_expansion_in_path_arguments() {
+    let fixture = Fixture::new();
+    fs::write(fixture.root.join("src/foo.rs"), "pub fn foo() -> bool { true }\n")
+        .expect("write foo fixture");
+    fs::write(fixture.root.join("src/bar.rs"), "pub fn bar() -> bool { true }\n")
+        .expect("write bar fixture");
+    let output = fixture.traci(&[
+        "check",
+        "--production-only",
+        "--format",
+        "json",
+        "src/{foo,bar}.rs",
+    ]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8(output.stdout).expect("UTF-8 JSON output");
+    assert!(stdout.contains("\"files\":2"));
+    assert!(stdout.contains("\"diagnostics\":[]"));
+}
+
+#[test]
+fn update_rejects_unexpected_arguments() {
+    let fixture = Fixture::new();
+    let output = fixture.traci(&["update", "--bogus"]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("UTF-8 stderr");
+    assert!(stderr.contains("usage: traci update"));
+}
+
+#[test]
+fn help_mentions_update_command() {
+    let fixture = Fixture::new();
+    let output = fixture.traci(&["help"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("UTF-8 help output");
+    assert!(stdout.contains("traci update"));
 }

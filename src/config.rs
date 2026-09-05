@@ -1,3 +1,4 @@
+use crate::curly;
 use crate::types::{ColorChoice, Rule, Severity};
 use std::collections::HashSet;
 use std::fs;
@@ -277,6 +278,7 @@ impl Config {
                 }
             }
         }
+        config.ignore = curly::expand_args(&config.ignore);
         if config.trace_window == 0 {
             // traci: allow - the caller records policy failures at the CLI boundary.
             return Err("analysis.trace_window must be greater than zero".into());
@@ -383,7 +385,25 @@ fn parse_string_array(value: &str) -> Result<Vec<String>, String> {
     if inner.trim().is_empty() {
         return Ok(Vec::new());
     }
-    inner.split(',').map(unquote).collect()
+
+    let mut items = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    for ch in inner.chars() {
+        match ch {
+            '"' => {
+                in_quotes = !in_quotes;
+                current.push(ch);
+            }
+            ',' if !in_quotes => {
+                items.push(std::mem::take(&mut current));
+            }
+            _ => current.push(ch),
+        }
+    }
+    items.push(current);
+
+    items.into_iter().map(|item| unquote(item.trim())).collect()
 }
 
 #[cfg(test)]
@@ -454,6 +474,20 @@ mod tests {
         assert_eq!(config.trace.model_for_score(29), "tiny");
         assert_eq!(config.trace.model_for_score(30), "standard");
         assert_eq!(config.trace.model_for_score(60), "large");
+    }
+
+    #[test]
+    fn expands_braces_in_ignore_patterns() {
+        let config = Config::parse(
+            r#"
+                [analysis]
+                ignore = ["{target,.git}/**", "vendor"]
+            "#,
+        )
+        .expect("valid policy");
+        assert!(config.path_ignored(Path::new("target/foo.rs")));
+        assert!(config.path_ignored(Path::new(".git/config")));
+        assert!(config.path_ignored(Path::new("vendor/lib.rs")));
     }
 
     #[test]

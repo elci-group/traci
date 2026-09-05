@@ -2,12 +2,12 @@ use std::env;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 use std::str::FromStr;
 use std::time::Duration;
 use traci::{
-    analyze_paths, complexity, fails_policy, render, trace, ui, ColorChoice, Config, EnforceOptions,
-    Format, Rule, Severity,
+    analyze_paths, complexity, curly, fails_policy, render, trace, ui, ColorChoice, Config,
+    EnforceOptions, Format, Rule, Severity,
 };
 
 const DEFAULT_POLICY: &str = r#"[analysis]
@@ -86,6 +86,7 @@ fn run(args: Vec<String>) -> Result<ExitCode, String> {
         }
         "explain" => run_explain(&args[1..]),
         "init" => run_init(&args[1..]),
+        "update" => run_update(&args[1..]),
         "help" | "-h" | "--help" => {
             print_help();
             Ok(ExitCode::SUCCESS)
@@ -179,7 +180,7 @@ fn parse_options(args: &[String], watch: bool) -> Result<Options, String> {
                 // traci: allow - main records this option error with structured context.
                 return Err(format!("unknown option '{option}'"));
             }
-            path => options.paths.push(PathBuf::from(path)),
+            path => options.paths.extend(curly::expand_arg(path).into_iter().map(PathBuf::from)),
         }
         index += 1;
     }
@@ -441,7 +442,7 @@ fn run_trace(args: &[String]) -> Result<ExitCode, String> {
                 // traci: allow - main records command validation failures.
                 return Err(format!("unknown trace option '{option}'"));
             }
-            path => paths.push(PathBuf::from(path)),
+            path => paths.extend(curly::expand_arg(path).into_iter().map(PathBuf::from)),
         }
         index += 1;
     }
@@ -614,6 +615,65 @@ fn run_init(args: &[String]) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
+fn run_update(args: &[String]) -> Result<ExitCode, String> {
+    if !args.is_empty() {
+        // traci: allow - main records this option error with structured context.
+        return Err("usage: traci update".into());
+    }
+
+    let repo_url = env!("CARGO_PKG_REPOSITORY");
+    let checkout_dir = env::temp_dir().join(format!(
+        "traci-update-{}-{}",
+        std::process::id(),
+        epoch_seconds()
+    ));
+
+    if checkout_dir.exists() {
+        std::fs::remove_dir_all(&checkout_dir)
+            .map_err(|error| format!("failed to clean up {}: {error}", checkout_dir.display()))?;
+    }
+
+    let checkout_str = checkout_dir
+        .to_str()
+        .ok_or_else(|| "temporary checkout path is not valid UTF-8".to_string())?;
+
+    println!("Cloning latest traci from {repo_url}…");
+    let clone_status = Command::new("git")
+        .args(["clone", "--depth", "1", repo_url, checkout_str])
+        .status()
+        .map_err(|error| format!("failed to run git clone: {error}"))?;
+    if !clone_status.success() {
+        // traci: allow - main records command execution failures.
+        return Err(format!("git clone of {repo_url} failed"));
+    }
+
+    println!("Installing with 'baby --user'…");
+    let install_result = Command::new("baby")
+        .arg("--user")
+        .current_dir(&checkout_dir)
+        .status();
+
+    let _ = std::fs::remove_dir_all(&checkout_dir);
+
+    let install_status = install_result.map_err(|error| {
+        format!("failed to run 'baby --user' (is baby installed and on PATH?): {error}")
+    })?;
+    if !install_status.success() {
+        // traci: allow - main records command execution failures.
+        return Err("'baby --user' install failed".into());
+    }
+
+    println!("traci updated to the latest version");
+    Ok(ExitCode::SUCCESS)
+}
+
+fn epoch_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
 fn run_enforce(args: &[String]) -> Result<ExitCode, String> {
     let mut repo_url = None;
     let mut fork_owner = None;
@@ -709,7 +769,7 @@ fn print_help() {
          traci enforce --repo URL [--fork-owner NAME] [--kaptaind URL] [--push] [--create-pr]\n  \
          traci trace [PATH...] --goal TEXT [--apply] [OPTIONS]\n  \
          traci watch [PATH...] [OPTIONS]\n  traci tui [PATH...] [OPTIONS]\n  traci rules\n  traci explain RULE\n  \
-         traci init [--force]\n\n\
+         traci init [--force]\n  traci update\n\n\
          Scope: --production-only excludes tests, benches, examples, fixtures, fuzz, and snapshots.\n\
          Presentation: --format tui, --color auto|always|never, --[no-]emoji, --[no-]animate.\n\
          Human output is styled on terminals; json, jsonl, and sarif remain machine-clean.",

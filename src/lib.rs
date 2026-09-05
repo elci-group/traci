@@ -3,11 +3,11 @@
 pub mod analyzer;
 pub mod complexity;
 pub mod config;
+pub mod curly;
 pub mod daemon;
 pub mod enforce;
 pub mod notify;
 pub mod report;
-pub mod ingest;
 pub mod trace;
 pub mod types;
 pub mod ui;

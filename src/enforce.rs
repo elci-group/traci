@@ -70,16 +70,16 @@ pub fn enforce(options: EnforceOptions, config: &Config) -> Result<EnforceOutcom
 
 fn extract_repo_name(url: &str) -> Result<String, String> {
     url.split('/')
-        .last()
+        .next_back()
         .and_then(|s| s.strip_suffix(".git"))
-        .or_else(|| url.split('/').last())
+        .or_else(|| url.split('/').next_back())
         .ok_or_else(|| format!("invalid repository URL: {}", url))
         .map(|s| s.to_string())
 }
 
 fn clone_repo(url: &str, target: &Path) -> Result<(), String> {
     let output = Command::new("git")
-        .args(&["clone", "--depth", "1", url, target.to_str().unwrap_or(".")])
+        .args(["clone", "--depth", "1", url, target.to_str().unwrap_or(".")])
         .output()
         .map_err(|e| format!("failed to clone repository: {}", e))?;
 
